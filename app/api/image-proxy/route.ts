@@ -15,13 +15,18 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const res = await fetch(imageUrl, {
-      headers: {
-        'User-Agent':
-          'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
-        Referer: 'https://www.tiktok.com/',
-      },
-    });
+    const headers: Record<string, string> = {
+      'User-Agent':
+        'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+    };
+
+    if (/tiktok/i.test(imageUrl)) {
+      headers.Referer = 'https://www.tiktok.com/';
+    } else if (/sndcdn|soundcloud/i.test(imageUrl)) {
+      headers.Referer = 'https://soundcloud.com/';
+    }
+
+    const res = await fetch(imageUrl, { headers });
 
     if (!res.ok) {
       return NextResponse.redirect('https://placehold.co/512x512/18181b/ffffff.jpg?text=Audio');

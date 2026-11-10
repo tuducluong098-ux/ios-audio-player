@@ -50,7 +50,7 @@ export interface TrackData {
   title: string;
   author: string;
   thumbnail: string;
-  source: 'youtube' | 'tiktok';
+  source: 'youtube' | 'tiktok' | 'soundcloud';
   mimeType: string;
   extractedAt: number;
 }
@@ -387,6 +387,8 @@ export default function AudioPlayerPage() {
       album:
         currentTrack.source === 'tiktok'
           ? 'TikTok Background Audio'
+          : currentTrack.source === 'soundcloud'
+          ? 'SoundCloud Background Audio'
           : 'YouTube Background Audio',
       artwork: [
         { src: proxiedArtworkUrl, sizes: '96x96' },
@@ -601,43 +603,14 @@ export default function AudioPlayerPage() {
   }, [ensureValidAudioUrl]);
 
   /**
-   * NÚT DÁN NHANH LIQUID GLASS CỠ LỚN:
-   * Bấm 1 cái -> tự đọc Clipboard dán vào + mở ngay Popup 2 lựa chọn (Phát ngay | Tiếp theo).
-   * Nếu Safari chưa có link trong clipboard -> vẫn mở Popup với ô nhập focus sẵn để dán tay.
+   * Khi dán trực tiếp vào ô nhập trên iPhone/máy tính -> tự điền link, hạ bàn phím
+   * và mở thẳng popup chọn Phát ngay | Tiếp theo.
    */
-  const handleBigPasteTap = async () => {
-    setError(null);
-    let pasted = '';
-    try {
-      const text = await navigator.clipboard.readText();
-      if (text && text.trim()) {
-        pasted = text.trim();
-      }
-    } catch {
-      // Nếu Safari từ chối hoặc chưa hỗ trợ, mở popup để người dùng dán tay
-    }
-
-    if (pasted) {
-      setPendingUrl(pasted);
-      setInputUrl(pasted);
-      setShowLinkActionModal(true);
-    } else if (inputUrl.trim()) {
-      setPendingUrl(inputUrl.trim());
-      setShowLinkActionModal(true);
-    } else {
-      setPendingUrl('');
-      setShowLinkActionModal(true);
-      setTimeout(() => {
-        popupInputRef.current?.focus();
-      }, 80);
-    }
-  };
-
-  // Khi dán trực tiếp vào ô nhập thủ công, tự mở luôn popup 2 nút Phát ngay / Tiếp theo
   const handleManualInputPaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
     const pasted = e.clipboardData.getData('text')?.trim();
     if (pasted) {
       e.preventDefault();
+      e.currentTarget.blur();
       setInputUrl(pasted);
       setPendingUrl(pasted);
       setShowLinkActionModal(true);
@@ -834,12 +807,14 @@ export default function AudioPlayerPage() {
     sleepTimerMinutes !== null && ![15, 30, 45].includes(sleepTimerMinutes);
   const detectedLinkSource = /tiktok\.com/i.test(pendingUrl)
     ? 'TikTok'
+    : /(soundcloud\.com|soundcloud\.app\.goo\.gl)/i.test(pendingUrl)
+    ? 'SoundCloud'
     : /(youtube\.com|youtu\.be)/i.test(pendingUrl)
     ? 'YouTube'
     : null;
 
   return (
-    <main className="relative min-h-screen w-full overflow-x-hidden flex flex-col items-center px-4 pt-[max(1rem,env(safe-area-inset-top))] pb-[max(2rem,env(safe-area-inset-bottom))]">
+    <main className="relative min-h-screen w-full overflow-x-hidden flex flex-col items-center px-4 pt-[max(1rem,env(safe-area-inset-top))] pb-[max(7.5rem,calc(env(safe-area-inset-bottom)+5.5rem))]">
       {/* NỀN ĐỘNG APPLE LIQUID GLASS */}
       <div className="fixed inset-0 -z-10 overflow-hidden bg-[#030306]">
         <div className="animate-orb-slow absolute -top-24 -left-20 w-80 h-80 rounded-full bg-indigo-500/30 blur-[95px]" />
@@ -919,7 +894,7 @@ export default function AudioPlayerPage() {
                   setPendingUrl(e.target.value);
                   setInputUrl(e.target.value);
                 }}
-                placeholder="Chạm giữ để Dán link TikTok / YouTube..."
+                placeholder="Chạm giữ để Dán link TikTok / YouTube / SoundCloud..."
                 className="w-full pl-9 pr-9 py-3 text-xs bg-black/35 border border-white/20 rounded-2xl text-white placeholder-white/45 focus:outline-none focus:border-white/50"
               />
               {pendingUrl && (
@@ -1038,30 +1013,11 @@ export default function AudioPlayerPage() {
           </div>
         </header>
 
-        {/* KHỐI 1: NÚT DÁN NHANH LIQUID GLASS + INPUT THỦ CÔNG */}
+        {/* KHỐI 1: 1 Ô NHẬP LINK LIQUID GLASS + 2 NÚT PHÁT NGAY / TIẾP THEO */}
         <section className="liquid-glass rounded-[32px] p-4 space-y-3">
-          {/* Nút Dán Nhanh Liquid Glass cỡ lớn (bấm là dán & mở popup chọn Phát ngay / Tiếp theo) */}
-          <button
-            type="button"
-            onClick={handleBigPasteTap}
-            className="liquid-paste-hero w-full py-5 px-5 rounded-[24px] flex items-center justify-center gap-3.5 text-left"
-          >
-            <div className="w-12 h-12 rounded-2xl bg-white text-zinc-950 flex items-center justify-center shadow-[0_8px_20px_rgba(255,255,255,0.28)] shrink-0">
-              <ClipboardPaste className="w-6 h-6" />
-            </div>
-            <div className="min-w-0 flex-1">
-              <div className="text-[15px] font-bold tracking-tight text-white">
-                Dán nhanh Link TikTok / YouTube
-              </div>
-              <div className="text-[11px] text-white/70 mt-0.5">
-                Chạm 1 lần để tự dán &amp; mở chọn Phát ngay hoặc Tiếp theo
-              </div>
-            </div>
-          </button>
-
-          {/* Ô nhập / sửa link thủ công gọn bên dưới */}
+          {/* 1 ô nhập link gọn (dán vào là tự bật popup chọn hoặc bấm 2 nút bên dưới) */}
           <div className="relative flex items-center">
-            <Link2 className="w-3.5 h-3.5 text-white/45 absolute left-3.5 pointer-events-none" />
+            <Link2 className="w-4 h-4 text-white/50 absolute left-4 pointer-events-none" />
             <input
               type="url"
               value={inputUrl}
@@ -1070,25 +1026,46 @@ export default function AudioPlayerPage() {
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && inputUrl.trim()) {
                   e.preventDefault();
+                  e.currentTarget.blur();
                   setPendingUrl(inputUrl.trim());
                   setShowLinkActionModal(true);
                 }
               }}
-              placeholder="Hoặc dán/nhập link trực tiếp vào đây..."
-              className="w-full pl-9 pr-20 py-2.5 text-xs bg-black/25 border border-white/12 rounded-2xl text-white placeholder-white/40 focus:outline-none focus:border-white/40 transition"
+              placeholder="Dán link TikTok, YouTube hoặc SoundCloud..."
+              className="w-full pl-11 pr-10 py-3.5 text-[13px] bg-black/30 border border-white/18 rounded-2xl text-white placeholder-white/45 focus:outline-none focus:border-white/50 focus:bg-black/40 transition"
             />
-            {inputUrl.trim() && (
+            {inputUrl && (
               <button
                 type="button"
-                onClick={() => {
-                  setPendingUrl(inputUrl.trim());
-                  setShowLinkActionModal(true);
-                }}
-                className="absolute right-1.5 px-3 py-1 rounded-xl bg-white text-zinc-950 text-[11px] font-semibold transition active:scale-95"
+                onClick={() => setInputUrl('')}
+                className="absolute right-3 p-1 rounded-full text-white/45 hover:text-white transition"
+                title="Xóa đường dẫn"
               >
-                Chọn
+                <X className="w-4 h-4" />
               </button>
             )}
+          </div>
+
+          <div className="grid grid-cols-2 gap-2.5">
+            <button
+              type="button"
+              disabled={loadingMode !== null}
+              onClick={() => handleExtractUrl('play', inputUrl)}
+              className="liquid-orb-primary py-3.5 px-4 rounded-2xl font-semibold text-xs text-zinc-950 transition flex items-center justify-center gap-1.5 disabled:opacity-60 active:scale-[0.97]"
+            >
+              <Play className="w-3.5 h-3.5 fill-current" />
+              <span>Phát ngay</span>
+            </button>
+
+            <button
+              type="button"
+              disabled={loadingMode !== null}
+              onClick={() => handleExtractUrl('queue', inputUrl)}
+              className="liquid-btn py-3.5 px-4 rounded-2xl font-semibold text-xs text-white flex items-center justify-center gap-1.5 disabled:opacity-60"
+            >
+              <ListPlus className="w-4 h-4 text-white/90" />
+              <span>+ Tiếp theo</span>
+            </button>
           </div>
 
           {error && (
@@ -1113,7 +1090,11 @@ export default function AudioPlayerPage() {
                   }`}
                 />
                 <span className="absolute -bottom-1.5 -right-1.5 px-2 py-0.5 rounded-full bg-black/75 backdrop-blur-md border border-white/25 text-[9px] font-bold uppercase tracking-wider text-white">
-                  {currentTrack.source === 'tiktok' ? 'TikTok' : 'YouTube'}
+                  {currentTrack.source === 'tiktok'
+                    ? 'TikTok'
+                    : currentTrack.source === 'soundcloud'
+                    ? 'SoundCloud'
+                    : 'YouTube'}
                 </span>
               </div>
 
