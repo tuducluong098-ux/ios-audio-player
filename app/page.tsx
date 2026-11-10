@@ -601,18 +601,12 @@ export default function AudioPlayerPage() {
   }, [ensureValidAudioUrl]);
 
   /**
-   * NÚT "DÁN & PHÁT":
-   * - Nếu ô nhập ở trên đã có link -> mở Popup 2 lựa chọn (Phát ngay | Tiếp theo).
-   * - Nếu ô nhập đang trống -> tự đọc Clipboard dán vào ô ở trên + mở Popup 2 lựa chọn.
+   * NÚT DÁN NHANH LIQUID GLASS CỠ LỚN:
+   * Bấm 1 cái -> tự đọc Clipboard dán vào + mở ngay Popup 2 lựa chọn (Phát ngay | Tiếp theo).
+   * Nếu Safari chưa có link trong clipboard -> vẫn mở Popup với ô nhập focus sẵn để dán tay.
    */
-  const handlePasteAndPlayTap = async () => {
+  const handleBigPasteTap = async () => {
     setError(null);
-    if (inputUrl.trim()) {
-      setPendingUrl(inputUrl.trim());
-      setShowLinkActionModal(true);
-      return;
-    }
-
     let pasted = '';
     try {
       const text = await navigator.clipboard.readText();
@@ -627,12 +621,26 @@ export default function AudioPlayerPage() {
       setPendingUrl(pasted);
       setInputUrl(pasted);
       setShowLinkActionModal(true);
+    } else if (inputUrl.trim()) {
+      setPendingUrl(inputUrl.trim());
+      setShowLinkActionModal(true);
     } else {
       setPendingUrl('');
       setShowLinkActionModal(true);
       setTimeout(() => {
         popupInputRef.current?.focus();
       }, 80);
+    }
+  };
+
+  // Khi dán trực tiếp vào ô nhập thủ công, tự mở luôn popup 2 nút Phát ngay / Tiếp theo
+  const handleManualInputPaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    const pasted = e.clipboardData.getData('text')?.trim();
+    if (pasted) {
+      e.preventDefault();
+      setInputUrl(pasted);
+      setPendingUrl(pasted);
+      setShowLinkActionModal(true);
     }
   };
 
@@ -1030,15 +1038,35 @@ export default function AudioPlayerPage() {
           </div>
         </header>
 
-        {/* KHỐI 1: Ô DÁN LINK + NÚT "DÁN & PHÁT" (GIỐNG ẢNH THAM CHIẾU) */}
+        {/* KHỐI 1: NÚT DÁN NHANH LIQUID GLASS + INPUT THỦ CÔNG */}
         <section className="liquid-glass rounded-[32px] p-4 space-y-3">
-          {/* Ô dán link phía trên */}
+          {/* Nút Dán Nhanh Liquid Glass cỡ lớn (bấm là dán & mở popup chọn Phát ngay / Tiếp theo) */}
+          <button
+            type="button"
+            onClick={handleBigPasteTap}
+            className="liquid-paste-hero w-full py-5 px-5 rounded-[24px] flex items-center justify-center gap-3.5 text-left"
+          >
+            <div className="w-12 h-12 rounded-2xl bg-white text-zinc-950 flex items-center justify-center shadow-[0_8px_20px_rgba(255,255,255,0.28)] shrink-0">
+              <ClipboardPaste className="w-6 h-6" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="text-[15px] font-bold tracking-tight text-white">
+                Dán nhanh Link TikTok / YouTube
+              </div>
+              <div className="text-[11px] text-white/70 mt-0.5">
+                Chạm 1 lần để tự dán &amp; mở chọn Phát ngay hoặc Tiếp theo
+              </div>
+            </div>
+          </button>
+
+          {/* Ô nhập / sửa link thủ công gọn bên dưới */}
           <div className="relative flex items-center">
-            <Link2 className="w-4 h-4 text-white/45 absolute left-4 pointer-events-none" />
+            <Link2 className="w-3.5 h-3.5 text-white/45 absolute left-3.5 pointer-events-none" />
             <input
               type="url"
               value={inputUrl}
               onChange={(e) => setInputUrl(e.target.value)}
+              onPaste={handleManualInputPaste}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && inputUrl.trim()) {
                   e.preventDefault();
@@ -1046,30 +1074,22 @@ export default function AudioPlayerPage() {
                   setShowLinkActionModal(true);
                 }
               }}
-              placeholder="Dán link TikTok hoặc YouTube vào đây..."
-              className="w-full pl-11 pr-10 py-3.5 text-[13px] bg-black/30 border border-white/15 rounded-2xl text-white placeholder-white/45 focus:outline-none focus:border-white/45 focus:bg-black/40 transition"
+              placeholder="Hoặc dán/nhập link trực tiếp vào đây..."
+              className="w-full pl-9 pr-20 py-2.5 text-xs bg-black/25 border border-white/12 rounded-2xl text-white placeholder-white/40 focus:outline-none focus:border-white/40 transition"
             />
-            {inputUrl && (
+            {inputUrl.trim() && (
               <button
                 type="button"
-                onClick={() => setInputUrl('')}
-                className="absolute right-3 p-1 rounded-full text-white/45 hover:text-white transition"
-                title="Xóa đường dẫn"
+                onClick={() => {
+                  setPendingUrl(inputUrl.trim());
+                  setShowLinkActionModal(true);
+                }}
+                className="absolute right-1.5 px-3 py-1 rounded-xl bg-white text-zinc-950 text-[11px] font-semibold transition active:scale-95"
               >
-                <X className="w-4 h-4" />
+                Chọn
               </button>
             )}
           </div>
-
-          {/* Nút "Dán & Phát" cỡ lớn ngay bên dưới */}
-          <button
-            type="button"
-            onClick={handlePasteAndPlayTap}
-            className="liquid-orb-primary w-full py-3.5 px-5 rounded-2xl font-bold text-[14px] tracking-tight text-zinc-950 flex items-center justify-center gap-2 active:scale-[0.97] transition"
-          >
-            <ClipboardPaste className="w-4 h-4" />
-            <span>Dán &amp; Phát</span>
-          </button>
 
           {error && (
             <div className="p-3 rounded-2xl bg-rose-500/20 border border-rose-300/30 text-rose-100 text-xs flex items-start gap-2 backdrop-blur-xl">
