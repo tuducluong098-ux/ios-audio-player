@@ -98,8 +98,8 @@ export function CircularTimerModal({
               <Timer className="w-4 h-4 text-white" />
             </div>
             <div>
-              <h3 className="text-sm font-semibold text-white">Đồng hồ hẹn giờ</h3>
-              <p className="text-[11px] text-white/60">Di tay kéo vòng tròn từ 1–60 phút</p>
+              <h3 className="text-base font-semibold text-white">Đồng hồ hẹn giờ</h3>
+              <p className="text-xs text-white/65">Di tay kéo vòng tròn từ 1–60 phút</p>
             </div>
           </div>
           <button
@@ -264,7 +264,7 @@ export function CircularTimerModal({
           >
             <Minus className="w-4 h-4" />
           </button>
-          <span className="text-xs font-medium text-white/75 tabular-nums px-2">
+          <span className="text-sm font-medium text-white/80 tabular-nums px-2">
             Tắt sau {minutes}:00 • Fade-out 15s cuối
           </span>
           <button
@@ -282,14 +282,14 @@ export function CircularTimerModal({
           <button
             type="button"
             onClick={onClose}
-            className="liquid-btn py-3 rounded-2xl text-xs font-semibold text-white/85"
+            className="liquid-btn py-3.5 rounded-2xl text-sm font-semibold text-white/90"
           >
             Hủy
           </button>
           <button
             type="button"
             onClick={() => onConfirm(minutes)}
-            className="liquid-orb-primary py-3 rounded-2xl text-xs font-semibold text-zinc-950 active:scale-[0.97] transition"
+            className="liquid-orb-primary py-3.5 rounded-2xl text-sm font-semibold text-zinc-950 active:scale-[0.97] transition"
           >
             Hẹn {minutes} phút
           </button>

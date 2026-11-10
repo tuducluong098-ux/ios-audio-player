@@ -32,6 +32,7 @@ import {
 } from 'lucide-react';
 import { AppleSpinner } from './components/AppleSpinner';
 import { CircularTimerModal } from './components/CircularTimerModal';
+import { Snowfall } from './components/Snowfall';
 
 // File WAV câm siêu nhẹ (44 bytes) dạng Base64 dùng để "Mở khóa" (Unlock) thẻ <audio>
 // ngay tại thời điểm người dùng chạm nút trên iOS Safari trước khi await fetch() hoàn tất.
@@ -832,9 +833,12 @@ export default function AudioPlayerPage() {
         <div className="absolute inset-0 bg-gradient-to-b from-black/45 via-black/35 to-black/80" />
       </div>
 
+      {/* HIỆU ỨNG TUYẾT RƠI NHÈ NHẸ */}
+      <Snowfall />
+
       {/* TOAST NỔI KIỂU DYNAMIC ISLAND */}
       {toast && (
-        <div className="fixed top-[max(1rem,env(safe-area-inset-top))] z-50 px-4 py-2.5 rounded-full bg-black/85 backdrop-blur-2xl border border-white/20 shadow-[0_12px_36px_rgba(0,0,0,0.65)] text-white text-xs font-medium flex items-center gap-2 transition-all">
+        <div className="fixed top-[max(1rem,env(safe-area-inset-top))] z-50 px-4 py-2.5 rounded-full bg-black/85 backdrop-blur-2xl border border-white/20 shadow-[0_12px_36px_rgba(0,0,0,0.65)] text-white text-sm font-medium flex items-center gap-2 transition-all">
           <span className="w-4 h-4 rounded-full bg-white/15 flex items-center justify-center">
             <Check className="w-3 h-3 text-emerald-300" />
           </span>
@@ -845,9 +849,9 @@ export default function AudioPlayerPage() {
       {/* POPUP LOADING QUAY VÒNG KIỂU APPLE HUD (GIỐNG ẢNH THAM CHIẾU) */}
       {loadingMode !== null && (
         <div className="fixed inset-0 z-50 bg-black/55 backdrop-blur-md flex items-center justify-center p-6">
-          <div className="liquid-glass rounded-[34px] px-10 py-8 flex flex-col items-center justify-center gap-4 min-w-[200px] shadow-[0_24px_70px_rgba(0,0,0,0.7)]">
-            <AppleSpinner size={52} className="text-white" />
-            <span className="text-sm font-semibold tracking-tight text-white/95">
+          <div className="liquid-glass rounded-[34px] px-10 py-8 flex flex-col items-center justify-center gap-4 min-w-[210px] shadow-[0_24px_70px_rgba(0,0,0,0.7)]">
+            <AppleSpinner size={54} className="text-white" />
+            <span className="text-base font-semibold tracking-tight text-white/95">
               Loading...
             </span>
           </div>
@@ -859,17 +863,17 @@ export default function AudioPlayerPage() {
         <div className="fixed inset-0 z-50 bg-black/65 backdrop-blur-md flex items-center justify-center p-4">
           <div className="liquid-glass w-full max-w-sm rounded-[34px] p-5 space-y-4">
             <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-full bg-white/15 border border-white/20 flex items-center justify-center">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-full bg-white/15 border border-white/20 flex items-center justify-center">
                   <ClipboardPaste className="w-4 h-4 text-white" />
                 </div>
                 <div>
-                  <h3 className="text-sm font-semibold text-white">
+                  <h3 className="text-base font-semibold text-white">
                     {detectedLinkSource
                       ? `Đã nhận link ${detectedLinkSource}`
                       : 'Dán link & Chọn phát'}
                   </h3>
-                  <p className="text-[11px] text-white/60">
+                  <p className="text-xs text-white/65">
                     Chọn Phát ngay hoặc thêm vào Tiếp theo
                   </p>
                 </div>
@@ -877,7 +881,7 @@ export default function AudioPlayerPage() {
               <button
                 type="button"
                 onClick={() => setShowLinkActionModal(false)}
-                className="liquid-btn w-8 h-8 rounded-full flex items-center justify-center text-white/75 hover:text-white"
+                className="liquid-btn w-9 h-9 rounded-full flex items-center justify-center text-white/75 hover:text-white"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -895,7 +899,7 @@ export default function AudioPlayerPage() {
                   setInputUrl(e.target.value);
                 }}
                 placeholder="Chạm giữ để Dán link TikTok / YouTube / SoundCloud..."
-                className="w-full pl-9 pr-9 py-3 text-xs bg-black/35 border border-white/20 rounded-2xl text-white placeholder-white/45 focus:outline-none focus:border-white/50"
+                className="w-full pl-10 pr-9 py-3 text-[15px] bg-black/35 border border-white/20 rounded-2xl text-white placeholder-white/45 focus:outline-none focus:border-white/50"
               />
               {pendingUrl && (
                 <button
@@ -907,7 +911,7 @@ export default function AudioPlayerPage() {
                   }}
                   className="absolute right-2.5 p-1 rounded-full text-white/50 hover:text-white"
                 >
-                  <X className="w-3.5 h-3.5" />
+                  <X className="w-4 h-4" />
                 </button>
               )}
             </div>
@@ -918,7 +922,7 @@ export default function AudioPlayerPage() {
                 type="button"
                 disabled={!pendingUrl.trim()}
                 onClick={() => handleExtractUrl('play', pendingUrl)}
-                className="liquid-orb-primary py-4 px-3 rounded-2xl font-semibold text-xs text-zinc-950 flex flex-col items-center justify-center gap-1.5 disabled:opacity-45 active:scale-[0.96] transition"
+                className="liquid-orb-primary py-4 px-3 rounded-2xl font-semibold text-sm text-zinc-950 flex flex-col items-center justify-center gap-1.5 disabled:opacity-45 active:scale-[0.96] transition"
               >
                 <Play className="w-5 h-5 fill-current" />
                 <span>Phát ngay</span>
@@ -928,7 +932,7 @@ export default function AudioPlayerPage() {
                 type="button"
                 disabled={!pendingUrl.trim()}
                 onClick={() => handleExtractUrl('queue', pendingUrl)}
-                className="liquid-btn py-4 px-3 rounded-2xl font-semibold text-xs text-white flex flex-col items-center justify-center gap-1.5 disabled:opacity-45"
+                className="liquid-btn py-4 px-3 rounded-2xl font-semibold text-sm text-white flex flex-col items-center justify-center gap-1.5 disabled:opacity-45"
               >
                 <ListPlus className="w-5 h-5 text-white" />
                 <span>Tiếp theo</span>
@@ -958,26 +962,26 @@ export default function AudioPlayerPage() {
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-md flex items-end sm:items-center justify-center p-4">
           <div className="liquid-glass w-full max-w-sm rounded-[32px] p-5 space-y-4">
             <div className="flex items-center justify-between">
-              <h3 className="text-sm font-semibold tracking-tight text-white">
+              <h3 className="text-base font-semibold tracking-tight text-white">
                 Thêm vào Playlist
               </h3>
               <button
                 onClick={() => setTrackToAddPlaylist(null)}
-                className="liquid-btn w-8 h-8 rounded-full flex items-center justify-center text-white/75 hover:text-white"
+                className="liquid-btn w-9 h-9 rounded-full flex items-center justify-center text-white/75 hover:text-white"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
-            <p className="text-xs text-white/65 truncate">{trackToAddPlaylist.title}</p>
+            <p className="text-sm text-white/70 truncate">{trackToAddPlaylist.title}</p>
             <div className="space-y-2 max-h-52 overflow-y-auto no-scrollbar">
               {playlists.map((pl) => (
                 <button
                   key={pl.id}
                   onClick={() => addTrackToPlaylist(pl.id, trackToAddPlaylist)}
-                  className="liquid-btn w-full flex items-center justify-between px-4 py-3 rounded-2xl text-left hover:bg-white/15"
+                  className="liquid-btn w-full flex items-center justify-between px-4 py-3.5 rounded-2xl text-left hover:bg-white/15"
                 >
-                  <span className="text-xs font-medium text-white">{pl.name}</span>
-                  <span className="text-[11px] text-white/55 tabular-nums">
+                  <span className="text-sm font-medium text-white">{pl.name}</span>
+                  <span className="text-xs text-white/60 tabular-nums">
                     {pl.tracks.length} bài
                   </span>
                 </button>
@@ -987,26 +991,26 @@ export default function AudioPlayerPage() {
         </div>
       )}
 
-      <div className="w-full max-w-md space-y-4 my-2">
+      <div className="relative z-10 w-full max-w-md space-y-4 my-2">
         {/* THANH TIÊU ĐỀ DYNAMIC PILL */}
         <header className="flex items-center justify-between px-1">
-          <div className="liquid-pill px-3.5 py-2 rounded-full flex items-center gap-2.5">
-            <div className="w-6 h-6 rounded-full bg-white/20 flex items-center justify-center">
+          <div className="liquid-pill px-4 py-2 rounded-full flex items-center gap-2.5">
+            <div className="w-7 h-7 rounded-full bg-white/20 flex items-center justify-center">
               {isPlaying ? (
-                <AudioLines className="w-3.5 h-3.5 text-white animate-pulse" />
+                <AudioLines className="w-4 h-4 text-white animate-pulse" />
               ) : (
-                <Music2 className="w-3.5 h-3.5 text-white" />
+                <Music2 className="w-4 h-4 text-white" />
               )}
             </div>
-            <span className="text-xs font-semibold tracking-tight text-white">
+            <span className="text-sm font-semibold tracking-tight text-white">
               LiquidAudio
             </span>
           </div>
 
-          <div className="liquid-pill px-3 py-1.5 rounded-full flex items-center gap-1.5 text-[11px] text-white/80">
+          <div className="liquid-pill px-3.5 py-2 rounded-full flex items-center gap-2 text-xs font-medium text-white/85">
             <span
-              className={`w-1.5 h-1.5 rounded-full ${
-                isPlaying ? 'bg-emerald-400 shadow-[0_0_8px_#34d399]' : 'bg-white/40'
+              className={`w-2 h-2 rounded-full ${
+                isPlaying ? 'bg-emerald-400 shadow-[0_0_8px_#34d399]' : 'bg-white/45'
               }`}
             />
             <span>{isPlaying ? 'Đang chạy nền' : 'iOS Safari Ready'}</span>
@@ -1031,14 +1035,14 @@ export default function AudioPlayerPage() {
                   setShowLinkActionModal(true);
                 }
               }}
-              placeholder="Dán link TikTok, YouTube hoặc SoundCloud..."
-              className="w-full pl-11 pr-10 py-3.5 text-[13px] bg-black/30 border border-white/18 rounded-2xl text-white placeholder-white/45 focus:outline-none focus:border-white/50 focus:bg-black/40 transition"
+              placeholder="Dán link TikTok, YouTube, SoundCloud..."
+              className="w-full pl-11 pr-10 py-3.5 text-[15px] bg-black/30 border border-white/18 rounded-2xl text-white placeholder-white/50 focus:outline-none focus:border-white/50 focus:bg-black/40 transition"
             />
             {inputUrl && (
               <button
                 type="button"
                 onClick={() => setInputUrl('')}
-                className="absolute right-3 p-1 rounded-full text-white/45 hover:text-white transition"
+                className="absolute right-3 p-1.5 rounded-full text-white/50 hover:text-white transition"
                 title="Xóa đường dẫn"
               >
                 <X className="w-4 h-4" />
@@ -1051,9 +1055,9 @@ export default function AudioPlayerPage() {
               type="button"
               disabled={loadingMode !== null}
               onClick={() => handleExtractUrl('play', inputUrl)}
-              className="liquid-orb-primary py-3.5 px-4 rounded-2xl font-semibold text-xs text-zinc-950 transition flex items-center justify-center gap-1.5 disabled:opacity-60 active:scale-[0.97]"
+              className="liquid-orb-primary py-3.5 px-4 rounded-2xl font-semibold text-sm text-zinc-950 transition flex items-center justify-center gap-2 disabled:opacity-60 active:scale-[0.97]"
             >
-              <Play className="w-3.5 h-3.5 fill-current" />
+              <Play className="w-4 h-4 fill-current" />
               <span>Phát ngay</span>
             </button>
 
@@ -1061,7 +1065,7 @@ export default function AudioPlayerPage() {
               type="button"
               disabled={loadingMode !== null}
               onClick={() => handleExtractUrl('queue', inputUrl)}
-              className="liquid-btn py-3.5 px-4 rounded-2xl font-semibold text-xs text-white flex items-center justify-center gap-1.5 disabled:opacity-60"
+              className="liquid-btn py-3.5 px-4 rounded-2xl font-semibold text-sm text-white flex items-center justify-center gap-2 disabled:opacity-60"
             >
               <ListPlus className="w-4 h-4 text-white/90" />
               <span>+ Tiếp theo</span>
@@ -1069,7 +1073,7 @@ export default function AudioPlayerPage() {
           </div>
 
           {error && (
-            <div className="p-3 rounded-2xl bg-rose-500/20 border border-rose-300/30 text-rose-100 text-xs flex items-start gap-2 backdrop-blur-xl">
+            <div className="p-3.5 rounded-2xl bg-rose-500/20 border border-rose-300/30 text-rose-100 text-sm flex items-start gap-2.5 backdrop-blur-xl">
               <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-rose-300" />
               <span>{error}</span>
             </div>
@@ -1089,7 +1093,7 @@ export default function AudioPlayerPage() {
                     isPlaying ? 'scale-100' : 'scale-[0.92] opacity-85'
                   }`}
                 />
-                <span className="absolute -bottom-1.5 -right-1.5 px-2 py-0.5 rounded-full bg-black/75 backdrop-blur-md border border-white/25 text-[9px] font-bold uppercase tracking-wider text-white">
+                <span className="absolute -bottom-1.5 -right-1.5 px-2.5 py-0.5 rounded-full bg-black/80 backdrop-blur-md border border-white/25 text-[10px] font-bold uppercase tracking-wider text-white">
                   {currentTrack.source === 'tiktok'
                     ? 'TikTok'
                     : currentTrack.source === 'soundcloud'
@@ -1100,20 +1104,20 @@ export default function AudioPlayerPage() {
 
               <div className="min-w-0 flex-1 space-y-1">
                 <div className="flex items-center gap-1.5 flex-wrap">
-                  <span className="px-2 py-0.5 rounded-full bg-white/12 border border-white/15 text-[10px] font-medium text-white/85 tabular-nums">
+                  <span className="px-2.5 py-0.5 rounded-full bg-white/12 border border-white/15 text-xs font-medium text-white/90 tabular-nums">
                     {currentIndex + 1} / {queue.length}
                   </span>
                   {repeatMode !== 'off' && (
-                    <span className="px-2 py-0.5 rounded-full bg-white/22 border border-white/30 text-[10px] font-semibold text-white">
+                    <span className="px-2.5 py-0.5 rounded-full bg-white/22 border border-white/30 text-xs font-semibold text-white">
                       {repeatMode === 'once' ? 'Lặp 1 lần' : 'Lặp vô tận ∞'}
                     </span>
                   )}
                 </div>
 
-                <h2 className="text-[15px] font-semibold tracking-tight text-white truncate">
+                <h2 className="text-base sm:text-lg font-semibold tracking-tight text-white truncate">
                   {currentTrack.title}
                 </h2>
-                <p className="text-xs text-white/65 truncate">{currentTrack.author}</p>
+                <p className="text-sm text-white/70 truncate">{currentTrack.author}</p>
               </div>
 
               <button
@@ -1140,7 +1144,7 @@ export default function AudioPlayerPage() {
                 }}
                 className="apple-slider w-full"
               />
-              <div className="flex justify-between text-[11px] font-medium text-white/60 tabular-nums">
+              <div className="flex justify-between text-xs font-medium text-white/65 tabular-nums">
                 <span>{formatTime(currentTime)}</span>
                 <span>-{formatTime(Math.max(0, (duration || 0) - currentTime))}</span>
               </div>
@@ -1151,7 +1155,7 @@ export default function AudioPlayerPage() {
               <button
                 type="button"
                 onClick={handlePrevTrack}
-                className="liquid-btn w-10 h-10 rounded-full flex items-center justify-center text-white/90"
+                className="liquid-btn w-11 h-11 rounded-full flex items-center justify-center text-white/90"
                 title="Bài trước"
               >
                 <SkipBack className="w-4 h-4 fill-current" />
@@ -1160,11 +1164,11 @@ export default function AudioPlayerPage() {
               <button
                 type="button"
                 onClick={() => seekRelative(-5)}
-                className="liquid-btn px-3 h-10 rounded-full flex items-center gap-1 text-white/90"
+                className="liquid-btn px-3.5 h-11 rounded-full flex items-center gap-1.5 text-white/90"
                 title="Tua lùi 5 giây"
               >
-                <RotateCcw className="w-3.5 h-3.5" />
-                <span className="text-[11px] font-semibold tabular-nums">-5s</span>
+                <RotateCcw className="w-4 h-4" />
+                <span className="text-xs font-semibold tabular-nums">-5s</span>
               </button>
 
               <button
@@ -1182,17 +1186,17 @@ export default function AudioPlayerPage() {
               <button
                 type="button"
                 onClick={() => seekRelative(5)}
-                className="liquid-btn px-3 h-10 rounded-full flex items-center gap-1 text-white/90"
+                className="liquid-btn px-3.5 h-11 rounded-full flex items-center gap-1.5 text-white/90"
                 title="Tua tiến 5 giây"
               >
-                <span className="text-[11px] font-semibold tabular-nums">+5s</span>
-                <RotateCw className="w-3.5 h-3.5" />
+                <span className="text-xs font-semibold tabular-nums">+5s</span>
+                <RotateCw className="w-4 h-4" />
               </button>
 
               <button
                 type="button"
                 onClick={handleNextTrack}
-                className="liquid-btn w-10 h-10 rounded-full flex items-center justify-center text-white/90"
+                className="liquid-btn w-11 h-11 rounded-full flex items-center justify-center text-white/90"
                 title="Bài tiếp theo"
               >
                 <SkipForward className="w-4 h-4 fill-current" />
@@ -1200,22 +1204,22 @@ export default function AudioPlayerPage() {
             </div>
 
             {/* Thanh phụ: Lặp bài + Dynamic Island + Hẹn giờ (15/30/45p + Đồng hồ kéo tay) + Âm lượng */}
-            <div className="pt-3 border-t border-white/12 space-y-3">
+            <div className="pt-3 border-t border-white/12 space-y-3.5">
               {/* Hàng 1: Chế độ lặp & Nút Dynamic Island */}
-              <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
                 <button
                   type="button"
                   onClick={cycleRepeatMode}
-                  className={`px-3 py-1.5 rounded-full text-[11px] font-medium flex items-center gap-1.5 border transition active:scale-95 ${
+                  className={`px-3.5 py-2 rounded-full text-xs font-medium flex items-center gap-1.5 border transition active:scale-95 ${
                     repeatMode !== 'off'
                       ? 'bg-white text-zinc-950 border-white shadow-[0_4px_16px_rgba(255,255,255,0.28)]'
-                      : 'liquid-btn text-white/80'
+                      : 'liquid-btn text-white/85'
                   }`}
                 >
                   {repeatMode === 'once' ? (
-                    <Repeat1 className="w-3.5 h-3.5" />
+                    <Repeat1 className="w-4 h-4" />
                   ) : (
-                    <Repeat className="w-3.5 h-3.5" />
+                    <Repeat className="w-4 h-4" />
                   )}
                   <span>
                     {repeatMode === 'off'
@@ -1233,7 +1237,7 @@ export default function AudioPlayerPage() {
                       prev === 'track' ? 'seek' : 'track'
                     )
                   }
-                  className="liquid-btn px-3 py-1.5 rounded-full text-[11px] font-medium text-white/85"
+                  className="liquid-btn px-3.5 py-2 rounded-full text-xs font-medium text-white/85"
                   title="Chọn cặp nút hiển thị trên Dynamic Island"
                 >
                   Dynamic Island:{' '}
@@ -1245,18 +1249,18 @@ export default function AudioPlayerPage() {
 
               {/* Hàng 2: Hẹn giờ 15 / 30 / 45 phút + Nút Đồng hồ kéo tay 1-60p */}
               <div className="flex items-center justify-between gap-2 flex-wrap">
-                <div className="flex items-center gap-1.5 text-xs text-white/80">
-                  <Timer className="w-3.5 h-3.5 text-white/75" />
-                  <span className="text-[11px] font-medium">Hẹn giờ:</span>
+                <div className="flex items-center gap-1.5 text-xs text-white/85">
+                  <Timer className="w-4 h-4 text-white/80" />
+                  <span className="font-medium">Hẹn giờ:</span>
                   {sleepRemainingSec !== null && (
-                    <span className="text-[11px] font-semibold text-emerald-300 tabular-nums">
+                    <span className="font-semibold text-emerald-300 tabular-nums">
                       {formatTime(sleepRemainingSec)}
                       {isFadingOut ? ' • Fade-out' : ''}
                     </span>
                   )}
                 </div>
 
-                <div className="flex items-center gap-1">
+                <div className="flex items-center gap-1.5">
                   {[15, 30, 45].map((mins) => (
                     <button
                       key={mins}
@@ -1264,10 +1268,10 @@ export default function AudioPlayerPage() {
                       onClick={() =>
                         startSleepTimer(sleepTimerMinutes === mins ? null : mins)
                       }
-                      className={`px-2.5 py-1 rounded-full text-[11px] font-semibold transition active:scale-95 ${
+                      className={`px-3 py-1.5 rounded-full text-xs font-semibold transition active:scale-95 ${
                         sleepTimerMinutes === mins
                           ? 'bg-white text-zinc-950 shadow'
-                          : 'bg-white/10 hover:bg-white/20 border border-white/12 text-white/80'
+                          : 'bg-white/10 hover:bg-white/20 border border-white/12 text-white/85'
                       }`}
                     >
                       {mins}p
@@ -1279,7 +1283,7 @@ export default function AudioPlayerPage() {
                     type="button"
                     onClick={() => setShowClockModal(true)}
                     title="Tùy chỉnh đồng hồ đếm ngược 1–60 phút"
-                    className={`px-2.5 py-1 rounded-full text-[11px] font-semibold flex items-center gap-1 transition active:scale-95 ${
+                    className={`px-3 py-1.5 rounded-full text-xs font-semibold flex items-center gap-1 transition active:scale-95 ${
                       isCustomSleepTime
                         ? 'bg-white text-zinc-950 shadow'
                         : 'bg-white/14 hover:bg-white/25 border border-white/20 text-white'
@@ -1293,7 +1297,7 @@ export default function AudioPlayerPage() {
                     <button
                       type="button"
                       onClick={() => startSleepTimer(null)}
-                      className="px-2.5 py-1 rounded-full text-[11px] font-medium bg-rose-500/25 border border-rose-300/30 text-rose-100"
+                      className="px-3 py-1.5 rounded-full text-xs font-medium bg-rose-500/25 border border-rose-300/30 text-rose-100"
                     >
                       Tắt
                     </button>
@@ -1303,7 +1307,7 @@ export default function AudioPlayerPage() {
 
               {/* Hàng 3: Thanh Âm lượng */}
               <div className="flex items-center gap-2.5">
-                <Volume2 className="w-4 h-4 text-white/60 shrink-0" />
+                <Volume2 className="w-4 h-4 text-white/65 shrink-0" />
                 <input
                   type="range"
                   min={0}
@@ -1316,7 +1320,7 @@ export default function AudioPlayerPage() {
                   }}
                   className="apple-slider w-full"
                 />
-                <span className="text-[10px] font-medium text-white/50 w-7 text-right tabular-nums">
+                <span className="text-xs font-medium text-white/60 w-9 text-right tabular-nums">
                   {volumePct}%
                 </span>
               </div>
@@ -1330,39 +1334,39 @@ export default function AudioPlayerPage() {
             <button
               type="button"
               onClick={() => setActiveTab('queue')}
-              className={`py-2 px-2 rounded-xl text-[11px] font-semibold flex items-center justify-center gap-1.5 transition ${
+              className={`py-2.5 px-2 rounded-xl text-[13px] font-semibold flex items-center justify-center gap-1.5 transition ${
                 activeTab === 'queue'
                   ? 'bg-white text-zinc-950 shadow-[0_4px_16px_rgba(255,255,255,0.2)]'
-                  : 'text-white/70 hover:text-white'
+                  : 'text-white/75 hover:text-white'
               }`}
             >
-              <ListMusic className="w-3.5 h-3.5" />
+              <ListMusic className="w-4 h-4" />
               <span>Tiếp ({queue.length})</span>
             </button>
 
             <button
               type="button"
               onClick={() => setActiveTab('playlists')}
-              className={`py-2 px-2 rounded-xl text-[11px] font-semibold flex items-center justify-center gap-1.5 transition ${
+              className={`py-2.5 px-2 rounded-xl text-[13px] font-semibold flex items-center justify-center gap-1.5 transition ${
                 activeTab === 'playlists'
                   ? 'bg-white text-zinc-950 shadow-[0_4px_16px_rgba(255,255,255,0.2)]'
-                  : 'text-white/70 hover:text-white'
+                  : 'text-white/75 hover:text-white'
               }`}
             >
-              <Sparkles className="w-3.5 h-3.5" />
+              <Sparkles className="w-4 h-4" />
               <span>Playlist ({playlists.length})</span>
             </button>
 
             <button
               type="button"
               onClick={() => setActiveTab('history')}
-              className={`py-2 px-2 rounded-xl text-[11px] font-semibold flex items-center justify-center gap-1.5 transition ${
+              className={`py-2.5 px-2 rounded-xl text-[13px] font-semibold flex items-center justify-center gap-1.5 transition ${
                 activeTab === 'history'
                   ? 'bg-white text-zinc-950 shadow-[0_4px_16px_rgba(255,255,255,0.2)]'
-                  : 'text-white/70 hover:text-white'
+                  : 'text-white/75 hover:text-white'
               }`}
             >
-              <History className="w-3.5 h-3.5" />
+              <History className="w-4 h-4" />
               <span>Đã nghe ({history.length})</span>
             </button>
           </div>
@@ -1371,8 +1375,8 @@ export default function AudioPlayerPage() {
           {activeTab === 'queue' && (
             <div className="space-y-2 max-h-72 overflow-y-auto no-scrollbar">
               {queue.length === 0 ? (
-                <p className="text-center text-xs text-white/50 py-8">
-                  Danh sách phát trống. Hãy bấm nút Dán nhanh ở trên hoặc chọn bài từ Lịch sử!
+                <p className="text-center text-sm text-white/55 py-8">
+                  Danh sách phát trống. Hãy dán link ở trên hoặc chọn bài từ Lịch sử!
                 </p>
               ) : (
                 queue.map((item, idx) => {
@@ -1380,7 +1384,7 @@ export default function AudioPlayerPage() {
                   return (
                     <div
                       key={`${item.id}_${idx}`}
-                      className={`flex items-center gap-3 p-2.5 rounded-2xl border transition ${
+                      className={`flex items-center gap-3 p-3 rounded-2xl border transition ${
                         isCurrent
                           ? 'bg-white/16 border-white/35 shadow-[inset_0_1px_0_rgba(255,255,255,0.3)]'
                           : 'bg-black/20 border-white/10 hover:bg-white/8'
@@ -1394,14 +1398,14 @@ export default function AudioPlayerPage() {
                         <img
                           src={`/api/image-proxy?url=${encodeURIComponent(item.thumbnail)}`}
                           alt={item.title}
-                          className="w-10 h-10 rounded-xl object-cover bg-white/10 border border-white/15 shrink-0"
+                          className="w-11 h-11 rounded-xl object-cover bg-white/10 border border-white/15 shrink-0"
                         />
                         <div className="min-w-0 flex-1">
-                          <p className="text-xs font-semibold text-white truncate">
+                          <p className="text-sm font-semibold text-white truncate">
                             {isCurrent ? '▶ ' : `${idx + 1}. `}
                             {item.title}
                           </p>
-                          <p className="text-[11px] text-white/60 truncate">
+                          <p className="text-xs text-white/65 truncate">
                             {item.author}
                           </p>
                         </div>
@@ -1411,7 +1415,7 @@ export default function AudioPlayerPage() {
                         type="button"
                         onClick={() => setTrackToAddPlaylist(item)}
                         title="Lưu vào Playlist"
-                        className="p-1.5 text-white/55 hover:text-white transition"
+                        className="p-2 text-white/60 hover:text-white transition"
                       >
                         <FolderPlus className="w-4 h-4" />
                       </button>
@@ -1432,7 +1436,7 @@ export default function AudioPlayerPage() {
                           }
                         }}
                         title="Xóa khỏi hàng đợi"
-                        className="p-1.5 text-white/45 hover:text-rose-300 transition"
+                        className="p-2 text-white/50 hover:text-rose-300 transition"
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>
@@ -1452,13 +1456,13 @@ export default function AudioPlayerPage() {
                   value={newPlaylistName}
                   onChange={(e) => setNewPlaylistName(e.target.value)}
                   placeholder="Tên playlist mới (VD: Chill Đêm)..."
-                  className="flex-1 px-3.5 py-2.5 text-xs bg-black/30 border border-white/15 rounded-2xl text-white placeholder-white/45 focus:outline-none focus:border-white/40"
+                  className="flex-1 px-4 py-2.5 text-sm bg-black/30 border border-white/15 rounded-2xl text-white placeholder-white/45 focus:outline-none focus:border-white/40"
                 />
                 <button
                   type="submit"
-                  className="liquid-orb-primary px-3.5 py-2 rounded-2xl text-zinc-950 text-xs font-semibold flex items-center gap-1 shrink-0 active:scale-95 transition"
+                  className="liquid-orb-primary px-4 py-2.5 rounded-2xl text-zinc-950 text-sm font-semibold flex items-center gap-1 shrink-0 active:scale-95 transition"
                 >
-                  <Plus className="w-3.5 h-3.5" />
+                  <Plus className="w-4 h-4" />
                   <span>Tạo</span>
                 </button>
               </form>
@@ -1469,10 +1473,10 @@ export default function AudioPlayerPage() {
                     key={pl.id}
                     type="button"
                     onClick={() => setSelectedPlaylistId(pl.id)}
-                    className={`px-3 py-1.5 rounded-full text-[11px] font-medium shrink-0 border transition ${
+                    className={`px-3.5 py-2 rounded-full text-xs font-medium shrink-0 border transition ${
                       selectedPlaylist?.id === pl.id
                         ? 'bg-white text-zinc-950 border-white shadow'
-                        : 'bg-white/10 border-white/12 text-white/75 hover:text-white'
+                        : 'bg-white/10 border-white/12 text-white/80 hover:text-white'
                     }`}
                   >
                     {pl.name} ({pl.tracks.length})
@@ -1482,12 +1486,12 @@ export default function AudioPlayerPage() {
 
               {selectedPlaylist && (
                 <div className="space-y-2">
-                  <div className="flex items-center justify-between p-3 rounded-2xl bg-black/25 border border-white/12">
+                  <div className="flex items-center justify-between p-3.5 rounded-2xl bg-black/25 border border-white/12">
                     <div>
-                      <h3 className="text-xs font-semibold text-white">
+                      <h3 className="text-sm font-semibold text-white">
                         {selectedPlaylist.name}
                       </h3>
-                      <p className="text-[10px] text-white/55">
+                      <p className="text-xs text-white/60">
                         {selectedPlaylist.tracks.length} bài • Tự động phát liên tục
                       </p>
                     </div>
@@ -1495,19 +1499,19 @@ export default function AudioPlayerPage() {
                       <button
                         type="button"
                         onClick={() => playEntirePlaylist(selectedPlaylist, 0)}
-                        className="liquid-orb-primary px-3 py-1.5 rounded-full text-zinc-950 text-[11px] font-semibold flex items-center gap-1 active:scale-95 transition"
+                        className="liquid-orb-primary px-3.5 py-2 rounded-full text-zinc-950 text-xs font-semibold flex items-center gap-1.5 active:scale-95 transition"
                       >
-                        <PlayCircle className="w-3.5 h-3.5" />
+                        <PlayCircle className="w-4 h-4" />
                         <span>Phát tất cả</span>
                       </button>
                       {playlists.length > 1 && (
                         <button
                           type="button"
                           onClick={() => handleDeletePlaylist(selectedPlaylist.id)}
-                          className="p-1.5 rounded-full bg-rose-500/20 border border-rose-300/25 text-rose-200 hover:bg-rose-500/30"
+                          className="p-2 rounded-full bg-rose-500/20 border border-rose-300/25 text-rose-200 hover:bg-rose-500/30"
                           title="Xóa Playlist"
                         >
-                          <Trash2 className="w-3.5 h-3.5" />
+                          <Trash2 className="w-4 h-4" />
                         </button>
                       )}
                     </div>
@@ -1515,32 +1519,32 @@ export default function AudioPlayerPage() {
 
                   <div className="space-y-1.5 max-h-56 overflow-y-auto no-scrollbar">
                     {selectedPlaylist.tracks.length === 0 ? (
-                      <p className="text-center text-xs text-white/50 py-6">
+                      <p className="text-center text-sm text-white/55 py-6">
                         Playlist trống. Bấm biểu tượng thư mục (+) trên bài hát để thêm vào đây!
                       </p>
                     ) : (
                       selectedPlaylist.tracks.map((item, idx) => (
                         <div
                           key={`${item.id}_${idx}`}
-                          className="flex items-center gap-3 p-2 rounded-2xl bg-black/20 border border-white/10 hover:bg-white/8 transition"
+                          className="flex items-center gap-3 p-2.5 rounded-2xl bg-black/20 border border-white/10 hover:bg-white/8 transition"
                         >
                           <button
                             type="button"
                             onClick={() => playEntirePlaylist(selectedPlaylist, idx)}
-                            className="flex items-center gap-2.5 flex-1 min-w-0 text-left"
+                            className="flex items-center gap-3 flex-1 min-w-0 text-left"
                           >
                             <img
                               src={`/api/image-proxy?url=${encodeURIComponent(
                                 item.thumbnail
                               )}`}
                               alt={item.title}
-                              className="w-9 h-9 rounded-xl object-cover bg-white/10 shrink-0"
+                              className="w-10 h-10 rounded-xl object-cover bg-white/10 shrink-0"
                             />
                             <div className="min-w-0 flex-1">
-                              <p className="text-xs font-medium text-white truncate">
+                              <p className="text-sm font-medium text-white truncate">
                                 {idx + 1}. {item.title}
                               </p>
-                              <p className="text-[10px] text-white/55 truncate">
+                              <p className="text-xs text-white/60 truncate">
                                 {item.author}
                               </p>
                             </div>
@@ -1550,10 +1554,10 @@ export default function AudioPlayerPage() {
                             onClick={() =>
                               removeTrackFromPlaylist(selectedPlaylist.id, item.id)
                             }
-                            className="p-1.5 text-white/45 hover:text-rose-300"
+                            className="p-2 text-white/50 hover:text-rose-300"
                             title="Xóa khỏi Playlist"
                           >
-                            <Trash2 className="w-3.5 h-3.5" />
+                            <Trash2 className="w-4 h-4" />
                           </button>
                         </div>
                       ))
@@ -1568,13 +1572,13 @@ export default function AudioPlayerPage() {
           {activeTab === 'history' && (
             <div className="space-y-2 max-h-72 overflow-y-auto no-scrollbar">
               {history.length === 0 ? (
-                <p className="text-center text-xs text-white/50 py-8">
+                <p className="text-center text-sm text-white/55 py-8">
                   Lịch sử trống. Các bài từng nghe sẽ lưu lại tại đây để lần sau ấn vô là phát ngay!
                 </p>
               ) : (
                 <>
                   <div className="flex justify-between items-center px-1 mb-1">
-                    <span className="text-[11px] text-white/55">
+                    <span className="text-xs text-white/60">
                       Ấn vào bài để phát ngay
                     </span>
                     <button
@@ -1584,7 +1588,7 @@ export default function AudioPlayerPage() {
                         localStorage.removeItem(STORAGE_KEYS.HISTORY);
                         showToast('Đã xóa lịch sử');
                       }}
-                      className="text-[11px] text-white/50 hover:text-rose-300"
+                      className="text-xs text-white/55 hover:text-rose-300"
                     >
                       Xóa tất cả
                     </button>
@@ -1592,7 +1596,7 @@ export default function AudioPlayerPage() {
                   {history.map((item) => (
                     <div
                       key={item.id}
-                      className="flex items-center gap-3 p-2.5 rounded-2xl bg-black/20 border border-white/10 hover:bg-white/10 transition"
+                      className="flex items-center gap-3 p-3 rounded-2xl bg-black/20 border border-white/10 hover:bg-white/10 transition"
                     >
                       <button
                         type="button"
@@ -1602,15 +1606,15 @@ export default function AudioPlayerPage() {
                         <img
                           src={`/api/image-proxy?url=${encodeURIComponent(item.thumbnail)}`}
                           alt={item.title}
-                          className="w-10 h-10 rounded-xl object-cover bg-white/10 border border-white/15 shrink-0"
+                          className="w-11 h-11 rounded-xl object-cover bg-white/10 border border-white/15 shrink-0"
                         />
                         <div className="min-w-0 flex-1">
-                          <p className="text-xs font-semibold text-white truncate">
+                          <p className="text-sm font-semibold text-white truncate">
                             {item.title}
                           </p>
-                          <p className="text-[11px] text-white/60 truncate">
+                          <p className="text-xs text-white/65 truncate">
                             {item.author} •{' '}
-                            <span className="uppercase text-[9px] text-white/80">
+                            <span className="uppercase text-[10px] text-white/85">
                               {item.source}
                             </span>
                           </p>
@@ -1623,7 +1627,7 @@ export default function AudioPlayerPage() {
                         title="Thêm vào Tiếp theo"
                         className="liquid-btn p-2 rounded-xl text-white/85"
                       >
-                        <ListPlus className="w-3.5 h-3.5" />
+                        <ListPlus className="w-4 h-4" />
                       </button>
 
                       <button
@@ -1632,7 +1636,7 @@ export default function AudioPlayerPage() {
                         title="Lưu vào Playlist"
                         className="liquid-btn p-2 rounded-xl text-white/85"
                       >
-                        <FolderPlus className="w-3.5 h-3.5" />
+                        <FolderPlus className="w-4 h-4" />
                       </button>
                     </div>
                   ))}
@@ -1643,7 +1647,7 @@ export default function AudioPlayerPage() {
         </section>
 
         {/* GHI CHÚ DYNAMIC ISLAND */}
-        <footer className="liquid-pill px-4 py-3 rounded-[24px] flex items-center gap-2.5 text-[11px] text-white/75">
+        <footer className="liquid-pill px-4 py-3.5 rounded-[24px] flex items-center gap-3 text-xs leading-relaxed text-white/80">
           <Smartphone className="w-4 h-4 text-white shrink-0" />
           <span>
             <b className="text-white">Dynamic Island &amp; Khóa màn hình:</b> Hiển thị ảnh đại diện,

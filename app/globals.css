@@ -180,6 +180,26 @@ input[type="range"].apple-slider:active::-webkit-slider-thumb {
   animation: floatOrb 15s ease-in-out infinite reverse;
 }
 
+/* Hiệu ứng tuyết rơi nhẹ trên GPU */
+@keyframes snowFall {
+  0% {
+    transform: translate3d(0, -10vh, 0);
+  }
+  50% {
+    transform: translate3d(var(--snow-sway, 16px), 50vh, 0);
+  }
+  100% {
+    transform: translate3d(calc(var(--snow-sway, 16px) * -0.5), 108vh, 0);
+  }
+}
+
+.snow-flake {
+  animation-name: snowFall;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+  will-change: transform;
+}
+
 /* Ẩn scrollbar mà vẫn cuộn mượt trên iPhone */
 .no-scrollbar::-webkit-scrollbar {
   display: none;
