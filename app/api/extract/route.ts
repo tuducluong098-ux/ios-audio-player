@@ -23,55 +23,163 @@ export interface ExtractedAudio {
   extractedAt: number;
 }
 
+const IPHONE_UA =
+  'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';
+
 /**
- * 1. Xử lý link TikTok qua TikWM Public API
+ * Trích xuất trực tiếp link trang âm thanh TikTok (/music/... hoặc link rút gọn vm.tiktok.com trỏ tới âm thanh)
  */
-async function extractTikTok(url: string): Promise<ExtractedAudio> {
-  const apiUrl = `https://www.tikwm.com/api/?url=${encodeURIComponent(url)}`;
-  const res = await fetch(apiUrl, {
+async function extractTikTokMusicPage(url: string): Promise<ExtractedAudio> {
+  const res = await fetch(url, {
     method: 'GET',
+    redirect: 'follow',
     headers: {
-      Accept: 'application/json',
-      'User-Agent':
-        'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+      'User-Agent': IPHONE_UA,
+      'Accept-Language': 'vi-VN,vi;q=0.9,en;q=0.8',
     },
     cache: 'no-store',
     signal: AbortSignal.timeout(8000),
   });
 
   if (!res.ok) {
-    throw new Error('Không thể kết nối tới máy chủ giải mã TikTok.');
+    throw new Error('Không thể mở trang âm thanh TikTok này.');
   }
 
-  const json = await res.json();
-  if (json.code !== 0 || !json.data) {
-    throw new Error(json.msg || 'Link TikTok không hợp lệ hoặc ở chế độ riêng tư.');
+  const finalUrl = res.url || url;
+  const html = await res.text();
+  const uniMatch = html.match(
+    /<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>([\s\S]*?)<\/script>/
+  );
+
+  if (!uniMatch?.[1]) {
+    throw new Error('Không đọc được dữ liệu âm thanh từ trang TikTok.');
   }
 
-  const data = json.data;
-  const audioUrl = data.music_info?.play || data.music || data.play;
+  const json = JSON.parse(uniMatch[1]);
+  const scope = json?.__DEFAULT_SCOPE__ || {};
 
-  if (!audioUrl) {
-    throw new Error('Không tìm thấy luồng âm thanh từ video TikTok này.');
+  const basic =
+    scope['sharing.music.music_state']?.musicInfo?.basic ||
+    scope['webapp.music-detail']?.musicInfo?.music;
+
+  const playUrl =
+    basic?.musicPlay?.playUrl?.[0] ||
+    basic?.playUrl ||
+    '';
+
+  if (playUrl) {
+    const thumb =
+      basic?.coverLarge?.[0] ||
+      basic?.coverMedium?.[0] ||
+      basic?.coverThumb?.[0] ||
+      basic?.coverLarge ||
+      'https://placehold.co/512x512/18181b/ffffff.jpg?text=TikTok';
+
+    return {
+      id: `ttm_${basic?.id || Date.now()}`,
+      originalUrl: url,
+      audioUrl: playUrl,
+      title: basic?.title || 'TikTok Sound',
+      author: basic?.authorName || 'TikTok Audio',
+      thumbnail: thumb,
+      source: 'tiktok',
+      mimeType: 'audio/mpeg',
+      extractedAt: Date.now(),
+    };
   }
 
-  const rawThumb =
-    data.origin_cover ||
-    data.cover ||
-    data.author?.avatar ||
-    'https://placehold.co/512x512/18181b/ffffff.jpg?text=TikTok';
+  // Fallback: nếu trang âm thanh không có playUrl trực tiếp nhưng có video đầu tiên dùng âm thanh đó
+  const firstItem = scope['sharing.music.music_list_state']?.itemList?.[0];
+  if (firstItem?.id) {
+    const fallbackVideoUrl = `https://www.tiktok.com/@tiktok/video/${firstItem.id}`;
+    const tikwmRes = await fetch(
+      `https://www.tikwm.com/api/?url=${encodeURIComponent(fallbackVideoUrl)}`,
+      {
+        headers: { Accept: 'application/json', 'User-Agent': IPHONE_UA },
+        cache: 'no-store',
+        signal: AbortSignal.timeout(6000),
+      }
+    );
+    if (tikwmRes.ok) {
+      const tikwmJson = await tikwmRes.json();
+      const audioUrl =
+        tikwmJson?.data?.music_info?.play ||
+        tikwmJson?.data?.music ||
+        tikwmJson?.data?.play;
+      if (tikwmJson?.code === 0 && audioUrl) {
+        return {
+          id: `ttm_${basic?.id || firstItem.id}`,
+          originalUrl: url,
+          audioUrl,
+          title: basic?.title || tikwmJson.data.music_info?.title || 'TikTok Sound',
+          author: basic?.authorName || tikwmJson.data.music_info?.author || 'TikTok Audio',
+          thumbnail:
+            basic?.coverLarge?.[0] ||
+            tikwmJson.data.cover ||
+            'https://placehold.co/512x512/18181b/ffffff.jpg?text=TikTok',
+          source: 'tiktok',
+          mimeType: 'audio/mp4',
+          extractedAt: Date.now(),
+        };
+      }
+    }
+  }
 
-  return {
-    id: `tt_${data.id || Date.now()}`,
-    originalUrl: url,
-    audioUrl,
-    title: data.title || data.music_info?.title || 'TikTok Audio',
-    author: data.author?.nickname || data.music_info?.author || 'TikTok Creator',
-    thumbnail: rawThumb,
-    source: 'tiktok',
-    mimeType: 'audio/mp4',
-    extractedAt: Date.now(),
-  };
+  if (!/\/music\//i.test(finalUrl)) {
+    throw new Error('Link TikTok không hợp lệ hoặc đã bị xóa.');
+  }
+  throw new Error('Không tìm thấy luồng âm thanh từ trang nhạc TikTok này.');
+}
+
+/**
+ * 1. Xử lý link TikTok (hỗ trợ cả link Video lẫn link Âm thanh /music/ & vm.tiktok.com)
+ */
+async function extractTikTok(url: string): Promise<ExtractedAudio> {
+  // Nếu là link trang âm thanh trực tiếp (/music/...) thì bóc thẳng từ trang TikTok
+  if (/tiktok\.com\/music\//i.test(url)) {
+    return extractTikTokMusicPage(url);
+  }
+
+  const apiUrl = `https://www.tikwm.com/api/?url=${encodeURIComponent(url)}`;
+  const res = await fetch(apiUrl, {
+    method: 'GET',
+    headers: {
+      Accept: 'application/json',
+      'User-Agent': IPHONE_UA,
+    },
+    cache: 'no-store',
+    signal: AbortSignal.timeout(8000),
+  });
+
+  if (res.ok) {
+    const json = await res.json();
+    if (json.code === 0 && json.data) {
+      const data = json.data;
+      const audioUrl = data.music_info?.play || data.music || data.play;
+      if (audioUrl) {
+        const rawThumb =
+          data.origin_cover ||
+          data.cover ||
+          data.author?.avatar ||
+          'https://placehold.co/512x512/18181b/ffffff.jpg?text=TikTok';
+
+        return {
+          id: `tt_${data.id || Date.now()}`,
+          originalUrl: url,
+          audioUrl,
+          title: data.title || data.music_info?.title || 'TikTok Audio',
+          author: data.author?.nickname || data.music_info?.author || 'TikTok Creator',
+          thumbnail: rawThumb,
+          source: 'tiktok',
+          mimeType: 'audio/mp4',
+          extractedAt: Date.now(),
+        };
+      }
+    }
+  }
+
+  // Nếu TikWM không parse được (VD: link rút gọn vm.tiktok.com dẫn tới trang Âm thanh /music/...) -> thử bóc trang âm thanh
+  return extractTikTokMusicPage(url);
 }
 
 /**

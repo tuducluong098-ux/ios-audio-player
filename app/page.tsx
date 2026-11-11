@@ -86,6 +86,7 @@ export default function AudioPlayerPage() {
   const [showLinkActionModal, setShowLinkActionModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showClockModal, setShowClockModal] = useState(false);
+  const [isBootLoading, setIsBootLoading] = useState(true);
   const [loadingMode, setLoadingMode] = useState<'play' | 'queue' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -229,6 +230,14 @@ export default function AudioPlayerPage() {
     },
     []
   );
+
+  // Giả lập loading nhẹ kiểu Apple HUD khi mới mở web
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setIsBootLoading(false);
+    }, 700);
+    return () => clearTimeout(timer);
+  }, []);
 
   // Khởi tạo dữ liệu từ localStorage + tự động kéo Cloud nếu đã đăng nhập Sync
   useEffect(() => {
@@ -1235,8 +1244,8 @@ export default function AudioPlayerPage() {
         </div>
       )}
 
-      {/* POPUP LOADING QUAY VÒNG KIỂU APPLE HUD */}
-      {loadingMode !== null && (
+      {/* POPUP LOADING QUAY VÒNG KIỂU APPLE HUD (KHI MỞ WEB HOẶC ĐANG TÁCH BÀI) */}
+      {(loadingMode !== null || isBootLoading) && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-md flex items-center justify-center p-6">
           <div className="liquid-glass rounded-[34px] px-10 py-8 flex flex-col items-center justify-center gap-4 min-w-[210px] shadow-[0_24px_70px_rgba(0,0,0,0.75)]">
             <AppleSpinner size={54} className="text-white" />
