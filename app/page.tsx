@@ -27,7 +27,6 @@ import {
   Clock,
   Settings,
   Repeat2,
-  Loader2,
   Compass,
 } from 'lucide-react';
 import Hls from 'hls.js';
@@ -41,6 +40,13 @@ import { CursorGlowCard } from './components/CursorGlowCard';
 import { SlidingPillTabs } from './components/SlidingPillTabs';
 import { LiquidGlassButton } from './components/LiquidGlassButton';
 import { DockedMiniPlayer } from './components/DockedMiniPlayer';
+import { HoldToDeleteButton, HoldToDeleteUndoBar } from './components/HoldToDeleteButton';
+import { CopyLinkButton } from './components/CopyLinkButton';
+import { HeartBurstButton } from './components/HeartBurstButton';
+import { TiltingSeekSlider } from './components/TiltingSeekSlider';
+import { SwipeToDeleteRow, UndoDeleteSnackbar } from './components/SwipeToDeleteRow';
+import { SuggestionSkeleton } from './components/SuggestionSkeleton';
+import { NetworkStatusBanner } from './components/NetworkStatusBanner';
 import {
   DynamicIslandToasts,
   type IslandToastItem,
@@ -109,10 +115,26 @@ export default function AudioPlayerPage() {
   const [showClockModal, setShowClockModal] = useState(false);
   const [isBootLoading, setIsBootLoading] = useState(true);
   const [loadingMode, setLoadingMode] = useState<'play' | 'queue' | null>(null);
+  const [successMode, setSuccessMode] = useState<'play' | 'queue' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [toasts, setToasts] = useState<IslandToastItem[]>([]);
   const toastSeqRef = useRef(0);
+  const successTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const nowPlayingCardRef = useRef<HTMLElement | null>(null);
+
+  // Undo states cho #003 (Giữ để xóa Playlist / Lịch sử) & #071 (Vuốt xóa bài hát)
+  const [deletedHistoryBackup, setDeletedHistoryBackup] = useState<TrackData[] | null>(null);
+  const [deletedPlaylistBackup, setDeletedPlaylistBackup] = useState<{
+    playlist: Playlist;
+    index: number;
+  } | null>(null);
+  const [swipeUndo, setSwipeUndo] = useState<
+    | { type: 'queue'; item: TrackData; index: number; resetKey: number }
+    | { type: 'playlistTrack'; playlistId: string; item: TrackData; index: number; resetKey: number }
+    | null
+  >(null);
+  const undoResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const swipeResetSeqRef = useRef(0);
 
   // Danh sách hàng đợi (Queue) & bài hiện tại
   const [queue, setQueue] = useState<TrackData[]>([]);
@@ -276,12 +298,16 @@ export default function AudioPlayerPage() {
     []
   );
 
-  // Giả lập loading nhẹ kiểu Apple HUD khi mới mở web
+  // Giả lập loading nhẹ kiểu Apple HUD khi mới mở web + cleanup timers Undo/Success
   useEffect(() => {
     const timer = setTimeout(() => {
       setIsBootLoading(false);
     }, 700);
-    return () => clearTimeout(timer);
+    return () => {
+      clearTimeout(timer);
+      if (successTimerRef.current) clearTimeout(successTimerRef.current);
+      if (undoResetTimerRef.current) clearTimeout(undoResetTimerRef.current);
+    };
   }, []);
 
   // Khởi tạo dữ liệu từ localStorage + tự động kéo Cloud nếu đã đăng nhập Sync
@@ -1185,6 +1211,15 @@ export default function AudioPlayerPage() {
     }
   };
 
+  const triggerButtonSuccess = (mode: 'play' | 'queue') => {
+    if (successTimerRef.current) clearTimeout(successTimerRef.current);
+    setSuccessMode(mode);
+    successTimerRef.current = setTimeout(() => {
+      setSuccessMode(null);
+      successTimerRef.current = null;
+    }, 1350);
+  };
+
   const handleExtractUrl = async (mode: 'play' | 'queue', targetUrl?: string) => {
     const finalUrl = (targetUrl ?? pendingUrl ?? inputUrl).trim();
     setError(null);
@@ -1196,12 +1231,15 @@ export default function AudioPlayerPage() {
 
     setShowLinkActionModal(false);
     const unlockPromise = unlockAudioOnUserGesture();
+    setSuccessMode(null);
     setLoadingMode(mode);
 
     try {
       const [result] = await Promise.all([fetchExtractRaw(finalUrl), unlockPromise]);
       setInputUrl('');
       setPendingUrl('');
+      setLoadingMode(null);
+      triggerButtonSuccess(mode);
 
       if ('isBatch' in result && result.isBatch) {
         const batchTracks = result.tracks;
@@ -1317,15 +1355,12 @@ export default function AudioPlayerPage() {
       const audio = audioRef.current;
       if (!audio) return;
       audio.currentTime = newTime;
+      lastPlayTimeRef.current = newTime;
       setCurrentTime(newTime);
       updateMediaSessionPosition();
     },
     [updateMediaSessionPosition]
   );
-
-  const handleSeekSlider = (e: React.ChangeEvent<HTMLInputElement>) => {
-    seekToTime(parseFloat(e.target.value));
-  };
 
   const handleVolumeChange = (val: number) => {
     setVolume(val);
@@ -1378,13 +1413,60 @@ export default function AudioPlayerPage() {
     showToast(`Đã tạo playlist "${name}"`);
   };
 
+  const scheduleClearDeleteBackups = () => {
+    if (undoResetTimerRef.current) clearTimeout(undoResetTimerRef.current);
+    undoResetTimerRef.current = setTimeout(() => {
+      setDeletedHistoryBackup(null);
+      setDeletedPlaylistBackup(null);
+      undoResetTimerRef.current = null;
+    }, 7000);
+  };
+
   const handleDeletePlaylist = (plId: string) => {
+    const idx = playlists.findIndex((p) => p.id === plId);
+    const target = playlists[idx];
+    if (!target) return;
+    setDeletedPlaylistBackup({ playlist: target, index: Math.max(0, idx) });
+    scheduleClearDeleteBackups();
+
     const updated = playlists.filter((p) => p.id !== plId);
     savePlaylists(updated);
     if (selectedPlaylistId === plId) {
       setSelectedPlaylistId(updated[0]?.id || null);
     }
-    showToast('Đã xóa playlist');
+    showToast(`Đã xóa playlist "${target.name}"`);
+  };
+
+  const handleUndoPlaylistDelete = () => {
+    if (!deletedPlaylistBackup) return;
+    const { playlist, index } = deletedPlaylistBackup;
+    const restored = [...playlists];
+    restored.splice(Math.min(index, restored.length), 0, playlist);
+    savePlaylists(restored);
+    setSelectedPlaylistId(playlist.id);
+    setDeletedPlaylistBackup(null);
+    showToast(`Đã khôi phục "${playlist.name}"`);
+  };
+
+  const handleHoldClearHistory = () => {
+    if (history.length === 0) return;
+    setDeletedHistoryBackup(history);
+    scheduleClearDeleteBackups();
+    setHistory([]);
+    try {
+      localStorage.removeItem(STORAGE_KEYS.HISTORY);
+    } catch {}
+    showToast('Đã xóa toàn bộ lịch sử nghe');
+  };
+
+  const handleUndoHistoryDelete = () => {
+    if (!deletedHistoryBackup) return;
+    setHistory(deletedHistoryBackup);
+    try {
+      localStorage.setItem(STORAGE_KEYS.HISTORY, JSON.stringify(deletedHistoryBackup));
+    } catch {}
+    setDeletedHistoryBackup(null);
+    showToast('Đã khôi phục lịch sử nghe');
   };
 
   const addTrackToPlaylist = (playlistId: string, track: TrackData) => {
@@ -1402,12 +1484,111 @@ export default function AudioPlayerPage() {
     showToast(`Đã lưu vào "${targetPl?.name || 'Playlist'}"`);
   };
 
+  const toggleFavoriteCurrentTrack = () => {
+    if (!currentTrack) return;
+    const favPl = playlists[0];
+    if (!favPl) {
+      const created: Playlist = {
+        id: 'pl_default',
+        name: 'Nhạc Yêu Thích',
+        createdAt: Date.now(),
+        tracks: [currentTrack],
+      };
+      savePlaylists([created]);
+      setSelectedPlaylistId(created.id);
+      showToast('Đã lưu vào "Nhạc Yêu Thích"');
+      return;
+    }
+
+    const exists = favPl.tracks.some(
+      (t) => t.id === currentTrack.id || t.originalUrl === currentTrack.originalUrl
+    );
+    const updated = playlists.map((pl, i) => {
+      if (i !== 0) return pl;
+      return {
+        ...pl,
+        tracks: exists
+          ? pl.tracks.filter(
+              (t) => t.id !== currentTrack.id && t.originalUrl !== currentTrack.originalUrl
+            )
+          : [...pl.tracks, currentTrack],
+      };
+    });
+    savePlaylists(updated);
+    showToast(exists ? `Đã bỏ khỏi "${favPl.name}"` : `Đã thả tim vào "${favPl.name}"`);
+  };
+
   const removeTrackFromPlaylist = (playlistId: string, trackId: string) => {
     const updated = playlists.map((pl) => {
       if (pl.id !== playlistId) return pl;
       return { ...pl, tracks: pl.tracks.filter((t) => t.id !== trackId) };
     });
     savePlaylists(updated);
+  };
+
+  const removeQueueItemWithUndo = (idx: number) => {
+    const target = queue[idx];
+    if (!target) return;
+    swipeResetSeqRef.current += 1;
+    setSwipeUndo({
+      type: 'queue',
+      item: target,
+      index: idx,
+      resetKey: swipeResetSeqRef.current,
+    });
+
+    const newQ = queue.filter((_, i) => i !== idx);
+    setQueue(newQ);
+    queueRef.current = newQ;
+
+    if (idx < currentIndex) {
+      setCurrentIndex((c) => c - 1);
+    } else if (idx === currentIndex && newQ.length > 0) {
+      playTrackAtIndex(Math.min(idx, newQ.length - 1), newQ);
+    } else if (newQ.length === 0) {
+      setCurrentIndex(-1);
+      audioRef.current?.pause();
+      setIsPlaying(false);
+    }
+  };
+
+  const removePlaylistTrackWithUndo = (playlistId: string, track: TrackData, idx: number) => {
+    swipeResetSeqRef.current += 1;
+    setSwipeUndo({
+      type: 'playlistTrack',
+      playlistId,
+      item: track,
+      index: idx,
+      resetKey: swipeResetSeqRef.current,
+    });
+    removeTrackFromPlaylist(playlistId, track.id);
+  };
+
+  const handleUndoSwipeDelete = () => {
+    if (!swipeUndo) return;
+    if (swipeUndo.type === 'queue') {
+      const restored = [...queueRef.current];
+      const insertAt = Math.min(swipeUndo.index, restored.length);
+      restored.splice(insertAt, 0, swipeUndo.item);
+      setQueue(restored);
+      queueRef.current = restored;
+      if (currentIndexRef.current >= 0 && insertAt <= currentIndexRef.current) {
+        setCurrentIndex((c) => c + 1);
+      } else if (currentIndexRef.current === -1 && restored.length === 1) {
+        setCurrentIndex(0);
+      }
+      showToast(`Đã khôi phục: ${swipeUndo.item.title}`);
+    } else {
+      const updated = playlists.map((pl) => {
+        if (pl.id !== swipeUndo.playlistId) return pl;
+        const nextTracks = [...pl.tracks];
+        nextTracks.splice(Math.min(swipeUndo.index, nextTracks.length), 0, swipeUndo.item);
+        return { ...pl, tracks: nextTracks };
+      });
+      savePlaylists(updated);
+      showToast(`Đã đưa lại vào playlist: ${swipeUndo.item.title}`);
+    }
+    setSwipeUndo(null);
   };
 
   const playEntirePlaylist = async (playlist: Playlist, startIndex = 0) => {
@@ -1545,6 +1726,20 @@ export default function AudioPlayerPage() {
   };
 
   const selectedPlaylist = playlists.find((p) => p.id === selectedPlaylistId) || playlists[0];
+  const favoritesPlaylist = playlists[0];
+  const isCurrentTrackLiked = Boolean(
+    currentTrack &&
+      favoritesPlaylist?.tracks.some(
+        (t) => t.id === currentTrack.id || t.originalUrl === currentTrack.originalUrl
+      )
+  );
+  const copyableTrackLink = currentTrack
+    ? currentTrack.originalUrl.startsWith('spotify-search://')
+      ? /^[a-zA-Z0-9]{22}$/.test(currentTrack.id.replace(/^sp_/, ''))
+        ? `https://open.spotify.com/track/${currentTrack.id.replace(/^sp_/, '')}`
+        : `${currentTrack.title} - ${currentTrack.author}`
+      : currentTrack.originalUrl
+    : '';
   const progressPct = duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0;
   const isCustomSleepTime =
     sleepTimerMinutes !== null && ![15, 30, 45].includes(sleepTimerMinutes);
@@ -1811,6 +2006,15 @@ export default function AudioPlayerPage() {
           </button>
         </header>
 
+        {/* THÔNG BÁO TRẠNG THÁI MẠNG & TỰ NỐI PHÁT NHẠC (#091) */}
+        <NetworkStatusBanner
+          onReconnect={() => {
+            if (queueRef.current[currentIndexRef.current] && audioRef.current?.paused) {
+              recoverCurrentTrack();
+            }
+          }}
+        />
+
         {/* KHỐI 1: Ô DÁN LINK KIỂU VIBECONVERT + NÚT LIQUID GLASS (#001 & #228) */}
         <CursorGlowCard className="p-3.5 space-y-3">
           <div className="flex items-center gap-2 bg-white/5 border border-white/10 rounded-2xl px-3 py-1.5 shadow-inner">
@@ -1851,6 +2055,8 @@ export default function AudioPlayerPage() {
               variant="primary"
               disabled={loadingMode !== null}
               isLoading={loadingMode === 'play'}
+              isSuccess={successMode === 'play'}
+              successLabel="Đang phát"
               onClick={() => handleExtractUrl('play', inputUrl)}
               className="py-3 px-4 rounded-2xl font-semibold text-sm flex items-center justify-center gap-2 disabled:opacity-60"
             >
@@ -1863,6 +2069,8 @@ export default function AudioPlayerPage() {
               variant="glass"
               disabled={loadingMode !== null}
               isLoading={loadingMode === 'queue'}
+              isSuccess={successMode === 'queue'}
+              successLabel="Đã thêm"
               onClick={() => handleExtractUrl('queue', inputUrl)}
               className="py-3 px-4 rounded-2xl font-semibold text-sm text-cyan-200 flex items-center justify-center gap-2 disabled:opacity-60"
             >
@@ -1909,14 +2117,24 @@ export default function AudioPlayerPage() {
                 <p className="text-sm text-white/65 truncate">{currentTrack.author}</p>
               </div>
 
-              <button
-                type="button"
-                onClick={() => setTrackToAddPlaylist(currentTrack)}
-                title="Lưu bài vào Playlist"
-                className="liquid-btn w-10 h-10 rounded-full flex items-center justify-center text-white/85 hover:text-cyan-300 shrink-0"
-              >
-                <FolderPlus className="w-4 h-4" />
-              </button>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <HeartBurstButton
+                  liked={isCurrentTrackLiked}
+                  onToggle={toggleFavoriteCurrentTrack}
+                />
+                <CopyLinkButton
+                  textToCopy={copyableTrackLink}
+                  onCopied={() => showToast('Đã sao chép link bài hát')}
+                />
+                <button
+                  type="button"
+                  onClick={() => setTrackToAddPlaylist(currentTrack)}
+                  title="Lưu bài vào Playlist"
+                  className="liquid-btn w-10 h-10 rounded-full flex items-center justify-center text-white/85 hover:text-cyan-300 shrink-0"
+                >
+                  <FolderPlus className="w-4 h-4" />
+                </button>
+              </div>
             </div>
 
             {/* Sóng âm Cyan -> Pink đồng bộ tiến trình + Ảnh đại diện tròn với hào quang xoay */}
@@ -1995,19 +2213,13 @@ export default function AudioPlayerPage() {
               </button>
             </div>
 
-            {/* Thanh tiến trình Gradient Cyan -> Pink */}
+            {/* Thanh tiến trình có bong bóng nghiêng theo tốc độ kéo (#017) */}
             <div className="space-y-1.5">
-              <input
-                type="range"
-                min={0}
-                max={duration || 100}
-                step={0.1}
+              <TiltingSeekSlider
                 value={currentTime}
-                onChange={handleSeekSlider}
-                style={{
-                  background: `linear-gradient(to right, #22d3ee 0%, #ec4899 ${progressPct}%, rgba(255,255,255,0.18) ${progressPct}%)`,
-                }}
-                className="apple-slider w-full"
+                max={duration}
+                formatTime={formatTime}
+                onSeek={seekToTime}
               />
               <div className="flex justify-between text-xs font-medium text-white/65 tabular-nums">
                 <span>{formatTime(currentTime)}</span>
@@ -2173,10 +2385,7 @@ export default function AudioPlayerPage() {
                   Hãy phát 1 bài hát để hiện các bài gợi ý cùng gu nhé!
                 </p>
               ) : loadingSuggestions && suggestions.length === 0 ? (
-                <div className="py-8 flex flex-col items-center justify-center gap-2 text-xs text-white/60">
-                  <Loader2 className="w-5 h-5 animate-spin text-cyan-300" />
-                  <span>Đang tìm bài gợi ý tương tự...</span>
-                </div>
+                <SuggestionSkeleton rows={4} />
               ) : suggestions.length === 0 ? (
                 <p className="text-center text-sm text-white/50 py-8">
                   Chưa tìm thấy bài gợi ý cho bài này. Thử phát 1 bài YouTube, SoundCloud hoặc Spotify!
@@ -2185,7 +2394,8 @@ export default function AudioPlayerPage() {
                 suggestions.map((item, idx) => (
                   <div
                     key={`${item.id}_${idx}`}
-                    className="flex items-center gap-3 p-2.5 rounded-2xl bg-white/5 border border-white/10 hover:bg-white/10 transition"
+                    style={{ '--d': `${idx * 42}ms` } as React.CSSProperties}
+                    className="u079-bloom flex items-center gap-3 p-2.5 rounded-2xl bg-white/5 border border-white/10 hover:bg-white/10 transition"
                   >
                     <span className="w-5 text-center text-xs font-semibold text-white/50 tabular-nums shrink-0">
                       {idx + 1}
@@ -2238,69 +2448,62 @@ export default function AudioPlayerPage() {
                 queue.map((item, idx) => {
                   const isCurrent = idx === currentIndex;
                   return (
-                    <div
+                    <SwipeToDeleteRow
                       key={`${item.id}_${idx}`}
-                      className={`flex items-center gap-3 p-2.5 rounded-2xl border transition ${
-                        isCurrent
-                          ? 'bg-cyan-400/12 border-cyan-300/35'
-                          : 'bg-white/5 border-white/10 hover:bg-white/10'
-                      }`}
+                      ariaLabel={`${item.title} - ${item.author}. Vuốt trái hoặc nhấn Delete để xóa`}
+                      onDelete={() => removeQueueItemWithUndo(idx)}
                     >
-                      <span className="w-5 text-center text-xs font-semibold text-white/50 tabular-nums shrink-0">
-                        {idx + 1}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => playTrackAtIndex(idx)}
-                        className="flex items-center gap-3 flex-1 min-w-0 text-left"
+                      <div
+                        className={`flex items-center gap-3 p-2.5 rounded-2xl border transition ${
+                          isCurrent
+                            ? 'bg-cyan-400/12 border-cyan-300/35'
+                            : 'bg-[#0b101d]/95 border-white/10 hover:bg-white/10'
+                        }`}
                       >
-                        <img
-                          src={`/api/image-proxy?url=${encodeURIComponent(item.thumbnail)}`}
-                          alt={item.title}
-                          className="w-11 h-11 rounded-xl object-cover bg-white/10 border border-white/15 shrink-0"
-                        />
-                        <div className="min-w-0 flex-1">
-                          <p
-                            className={`text-sm font-semibold truncate ${
-                              isCurrent ? 'text-cyan-300' : 'text-white'
-                            }`}
-                          >
-                            {item.title}
-                          </p>
-                          <p className="text-xs text-white/60 truncate">{item.author}</p>
-                        </div>
-                      </button>
+                        <span className="w-5 text-center text-xs font-semibold text-white/50 tabular-nums shrink-0">
+                          {idx + 1}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => playTrackAtIndex(idx)}
+                          className="flex items-center gap-3 flex-1 min-w-0 text-left"
+                        >
+                          <img
+                            src={`/api/image-proxy?url=${encodeURIComponent(item.thumbnail)}`}
+                            alt={item.title}
+                            className="w-11 h-11 rounded-xl object-cover bg-white/10 border border-white/15 shrink-0"
+                          />
+                          <div className="min-w-0 flex-1">
+                            <p
+                              className={`text-sm font-semibold truncate ${
+                                isCurrent ? 'text-cyan-300' : 'text-white'
+                              }`}
+                            >
+                              {item.title}
+                            </p>
+                            <p className="text-xs text-white/60 truncate">{item.author}</p>
+                          </div>
+                        </button>
 
-                      <button
-                        type="button"
-                        onClick={() => setTrackToAddPlaylist(item)}
-                        title="Lưu vào Playlist"
-                        className="p-2 text-white/55 hover:text-cyan-300 transition"
-                      >
-                        <FolderPlus className="w-4 h-4" />
-                      </button>
+                        <button
+                          type="button"
+                          onClick={() => setTrackToAddPlaylist(item)}
+                          title="Lưu vào Playlist"
+                          className="p-2 text-white/55 hover:text-cyan-300 transition"
+                        >
+                          <FolderPlus className="w-4 h-4" />
+                        </button>
 
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const newQ = queue.filter((_, i) => i !== idx);
-                          setQueue(newQ);
-                          if (idx < currentIndex) {
-                            setCurrentIndex((c) => c - 1);
-                          } else if (idx === currentIndex && newQ.length > 0) {
-                            playTrackAtIndex(Math.min(idx, newQ.length - 1), newQ);
-                          } else if (newQ.length === 0) {
-                            setCurrentIndex(-1);
-                            audioRef.current?.pause();
-                            setIsPlaying(false);
-                          }
-                        }}
-                        title="Xóa khỏi hàng đợi"
-                        className="p-2 text-white/45 hover:text-rose-300 transition"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
+                        <button
+                          type="button"
+                          onClick={() => removeQueueItemWithUndo(idx)}
+                          title="Xóa khỏi hàng đợi"
+                          className="p-2 text-white/45 hover:text-rose-300 transition"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </SwipeToDeleteRow>
                   );
                 })
               )}
@@ -2344,35 +2547,40 @@ export default function AudioPlayerPage() {
                 ))}
               </div>
 
+              {deletedPlaylistBackup && (
+                <HoldToDeleteUndoBar
+                  message={`Đã xóa playlist "${deletedPlaylistBackup.playlist.name}"`}
+                  onUndo={handleUndoPlaylistDelete}
+                />
+              )}
+
               {selectedPlaylist && (
                 <div className="space-y-2">
-                  <div className="flex items-center justify-between p-3.5 rounded-2xl bg-white/5 border border-white/10">
-                    <div>
-                      <h3 className="text-sm font-semibold text-white">
+                  <div className="flex items-center justify-between gap-2 p-3.5 rounded-2xl bg-white/5 border border-white/10">
+                    <div className="min-w-0">
+                      <h3 className="text-sm font-semibold text-white truncate">
                         {selectedPlaylist.name}
                       </h3>
                       <p className="text-xs text-white/60">
                         {selectedPlaylist.tracks.length} bài • Phát tự động liên tục
                       </p>
                     </div>
-                    <div className="flex items-center gap-1.5">
+                    <div className="flex items-center gap-1.5 shrink-0">
                       <button
                         type="button"
                         onClick={() => playEntirePlaylist(selectedPlaylist, 0)}
-                        className="neon-orb-primary px-3.5 py-2 rounded-full text-white text-xs font-semibold flex items-center gap-1.5 active:scale-95 transition"
+                        className="neon-orb-primary px-3 py-2 rounded-full text-white text-xs font-semibold flex items-center gap-1 active:scale-95 transition"
                       >
-                        <PlayCircle className="w-4 h-4" />
+                        <PlayCircle className="w-3.5 h-3.5" />
                         <span>Phát tất cả</span>
                       </button>
                       {playlists.length > 1 && (
-                        <button
-                          type="button"
-                          onClick={() => handleDeletePlaylist(selectedPlaylist.id)}
-                          className="p-2 rounded-full bg-rose-500/20 border border-rose-300/25 text-rose-200 hover:bg-rose-500/30"
-                          title="Xóa Playlist"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
+                        <HoldToDeleteButton
+                          label="Giữ xóa"
+                          holdingLabel="Đang giữ..."
+                          ariaLabel={`Nhấn giữ để xóa playlist ${selectedPlaylist.name}`}
+                          onConfirm={() => handleDeletePlaylist(selectedPlaylist.id)}
+                        />
                       )}
                     </div>
                   </div>
@@ -2384,45 +2592,50 @@ export default function AudioPlayerPage() {
                       </p>
                     ) : (
                       selectedPlaylist.tracks.map((item, idx) => (
-                        <div
+                        <SwipeToDeleteRow
                           key={`${item.id}_${idx}`}
-                          className="flex items-center gap-3 p-2.5 rounded-2xl bg-white/5 border border-white/10 hover:bg-white/10 transition"
+                          ariaLabel={`${item.title}. Vuốt trái hoặc nhấn Delete để xóa khỏi playlist`}
+                          onDelete={() =>
+                            removePlaylistTrackWithUndo(selectedPlaylist.id, item, idx)
+                          }
                         >
-                          <span className="w-5 text-center text-xs font-semibold text-white/50 tabular-nums shrink-0">
-                            {idx + 1}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => playEntirePlaylist(selectedPlaylist, idx)}
-                            className="flex items-center gap-3 flex-1 min-w-0 text-left"
-                          >
-                            <img
-                              src={`/api/image-proxy?url=${encodeURIComponent(
-                                item.thumbnail
-                              )}`}
-                              alt={item.title}
-                              className="w-10 h-10 rounded-xl object-cover bg-white/10 shrink-0"
-                            />
-                            <div className="min-w-0 flex-1">
-                              <p className="text-sm font-medium text-white truncate">
-                                {item.title}
-                              </p>
-                              <p className="text-xs text-white/60 truncate">
-                                {item.author}
-                              </p>
-                            </div>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              removeTrackFromPlaylist(selectedPlaylist.id, item.id)
-                            }
-                            className="p-2 text-white/45 hover:text-rose-300"
-                            title="Xóa khỏi Playlist"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
+                          <div className="flex items-center gap-3 p-2.5 rounded-2xl bg-[#0b101d]/95 border border-white/10 hover:bg-white/10 transition">
+                            <span className="w-5 text-center text-xs font-semibold text-white/50 tabular-nums shrink-0">
+                              {idx + 1}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => playEntirePlaylist(selectedPlaylist, idx)}
+                              className="flex items-center gap-3 flex-1 min-w-0 text-left"
+                            >
+                              <img
+                                src={`/api/image-proxy?url=${encodeURIComponent(
+                                  item.thumbnail
+                                )}`}
+                                alt={item.title}
+                                className="w-10 h-10 rounded-xl object-cover bg-white/10 shrink-0"
+                              />
+                              <div className="min-w-0 flex-1">
+                                <p className="text-sm font-medium text-white truncate">
+                                  {item.title}
+                                </p>
+                                <p className="text-xs text-white/60 truncate">
+                                  {item.author}
+                                </p>
+                              </div>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                removePlaylistTrackWithUndo(selectedPlaylist.id, item, idx)
+                              }
+                              className="p-2 text-white/45 hover:text-rose-300"
+                              title="Xóa khỏi Playlist"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </SwipeToDeleteRow>
                       ))
                     )}
                   </div>
@@ -2434,27 +2647,29 @@ export default function AudioPlayerPage() {
           {/* TAB 3: LỊCH SỬ BÀI TỪNG NGHE */}
           {activeTab === 'history' && (
             <div className="space-y-2 max-h-72 overflow-y-auto no-scrollbar u039-stagger">
+              {deletedHistoryBackup && (
+                <HoldToDeleteUndoBar
+                  message={`Đã xóa ${deletedHistoryBackup.length} bài trong lịch sử`}
+                  onUndo={handleUndoHistoryDelete}
+                />
+              )}
+
               {history.length === 0 ? (
                 <p className="text-center text-sm text-white/50 py-8">
                   Lịch sử trống. Các bài từng nghe sẽ lưu lại tại đây để lần sau ấn vô là phát ngay!
                 </p>
               ) : (
                 <>
-                  <div className="flex justify-between items-center px-1 mb-1">
+                  <div className="flex justify-between items-center gap-2 px-1 mb-1">
                     <span className="text-xs text-white/60">
                       Ấn vào bài để phát ngay
                     </span>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setHistory([]);
-                        localStorage.removeItem(STORAGE_KEYS.HISTORY);
-                        showToast('Đã xóa lịch sử');
-                      }}
-                      className="text-xs text-white/50 hover:text-rose-300"
-                    >
-                      Xóa tất cả
-                    </button>
+                    <HoldToDeleteButton
+                      label="Xóa tất cả"
+                      holdingLabel="Đang giữ..."
+                      ariaLabel="Nhấn giữ để xóa toàn bộ lịch sử nghe"
+                      onConfirm={handleHoldClearHistory}
+                    />
                   </div>
                   {history.map((item, idx) => (
                     <div
@@ -2565,6 +2780,16 @@ export default function AudioPlayerPage() {
           className="hidden"
         />
       </div>
+
+      {/* SNACKBAR HOÀN TÁC KHI VUỐT XÓA BÀI HÁT (#071) */}
+      <UndoDeleteSnackbar
+        visible={swipeUndo !== null}
+        message={swipeUndo ? `Đã xóa "${swipeUndo.item.title}"` : ''}
+        hasBottomDock={Boolean(currentTrack)}
+        resetKey={swipeUndo?.resetKey || 0}
+        onUndo={handleUndoSwipeDelete}
+        onExpire={() => setSwipeUndo(null)}
+      />
 
       {/* MINI PLAYER NỔI KHI CUỘN XUỐNG (#218) */}
       <DockedMiniPlayer
