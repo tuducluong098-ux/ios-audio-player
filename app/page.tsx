@@ -3,7 +3,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   Play,
-  Pause,
   SkipBack,
   SkipForward,
   RotateCcw,
@@ -19,7 +18,6 @@ import {
   FolderPlus,
   Trash2,
   Timer,
-  Check,
   Sparkles,
   ListPlus,
   PlayCircle,
@@ -38,6 +36,15 @@ import { CircularTimerModal } from './components/CircularTimerModal';
 import { Snowfall } from './components/Snowfall';
 import { WaveformVisualizer } from './components/WaveformVisualizer';
 import { SettingsModal } from './components/SettingsModal';
+import { PlayPauseMorphOrb } from './components/PlayPauseMorphOrb';
+import { CursorGlowCard } from './components/CursorGlowCard';
+import { SlidingPillTabs } from './components/SlidingPillTabs';
+import { LiquidGlassButton } from './components/LiquidGlassButton';
+import { DockedMiniPlayer } from './components/DockedMiniPlayer';
+import {
+  DynamicIslandToasts,
+  type IslandToastItem,
+} from './components/DynamicIslandToasts';
 
 // File WAV câm siêu nhẹ (44 bytes) dùng mở khóa thẻ <audio> trên iOS Safari trước khi fetch()
 const SILENT_AUDIO_URI =
@@ -103,7 +110,9 @@ export default function AudioPlayerPage() {
   const [isBootLoading, setIsBootLoading] = useState(true);
   const [loadingMode, setLoadingMode] = useState<'play' | 'queue' | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [toast, setToast] = useState<string | null>(null);
+  const [toasts, setToasts] = useState<IslandToastItem[]>([]);
+  const toastSeqRef = useRef(0);
+  const nowPlayingCardRef = useRef<HTMLElement | null>(null);
 
   // Danh sách hàng đợi (Queue) & bài hiện tại
   const [queue, setQueue] = useState<TrackData[]>([]);
@@ -118,6 +127,7 @@ export default function AudioPlayerPage() {
   const [suggestions, setSuggestions] = useState<SuggestedTrack[]>([]);
   const [loadingSuggestions, setLoadingSuggestions] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<'queue' | 'suggestions' | 'playlists' | 'history'>('queue');
+  const [tabDirection, setTabDirection] = useState<1 | -1>(1);
 
   // Quản lý tạo/chọn Playlist
   const [newPlaylistName, setNewPlaylistName] = useState('');
@@ -207,10 +217,12 @@ export default function AudioPlayerPage() {
   }, [suggestions]);
 
   const showToast = useCallback((msg: string) => {
-    setToast(msg);
-    setTimeout(() => {
-      setToast((prev) => (prev === msg ? null : prev));
-    }, 3000);
+    const id = ++toastSeqRef.current;
+    setToasts((prev) => [{ id, message: msg }, ...prev.slice(0, 4)]);
+  }, []);
+
+  const dismissToast = useCallback((id: number) => {
+    setToasts((prev) => prev.filter((item) => item.id !== id));
   }, []);
 
   // Áp dụng dữ liệu đồng bộ từ Cloud về máy
@@ -1251,13 +1263,19 @@ export default function AudioPlayerPage() {
     }
   };
 
+  const seekToTime = useCallback(
+    (newTime: number) => {
+      const audio = audioRef.current;
+      if (!audio) return;
+      audio.currentTime = newTime;
+      setCurrentTime(newTime);
+      updateMediaSessionPosition();
+    },
+    [updateMediaSessionPosition]
+  );
+
   const handleSeekSlider = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const audio = audioRef.current;
-    if (!audio) return;
-    const newTime = parseFloat(e.target.value);
-    audio.currentTime = newTime;
-    setCurrentTime(newTime);
-    updateMediaSessionPosition();
+    seekToTime(parseFloat(e.target.value));
   };
 
   const handleVolumeChange = (val: number) => {
@@ -1514,15 +1532,8 @@ export default function AudioPlayerPage() {
       {/* HIỆU ỨNG TUYẾT RƠI NHÈ NHẸ */}
       <Snowfall />
 
-      {/* TOAST NỔI KIỂU DYNAMIC ISLAND */}
-      {toast && (
-        <div className="fixed top-[max(1rem,env(safe-area-inset-top))] z-50 px-4 py-2.5 rounded-full bg-black/85 backdrop-blur-2xl border border-cyan-300/30 shadow-[0_12px_36px_rgba(0,0,0,0.65)] text-white text-sm font-medium flex items-center gap-2 transition-all">
-          <span className="w-4 h-4 rounded-full bg-cyan-400/20 flex items-center justify-center">
-            <Check className="w-3 h-3 text-cyan-300" />
-          </span>
-          <span>{toast}</span>
-        </div>
-      )}
+      {/* TOAST NỔI KIỂU DYNAMIC ISLAND XẾP CHỒNG (#070) */}
+      <DynamicIslandToasts toasts={toasts} onDismiss={dismissToast} />
 
       {/* POPUP LOADING QUAY VÒNG KIỂU APPLE HUD (KHI MỞ WEB HOẶC ĐANG TÁCH BÀI) */}
       {(loadingMode !== null || isBootLoading) && (
@@ -1594,25 +1605,33 @@ export default function AudioPlayerPage() {
             </div>
 
             <div className="grid grid-cols-2 gap-3 pt-1">
-              <button
+              <LiquidGlassButton
                 type="button"
+                variant="primary"
                 disabled={!pendingUrl.trim()}
+                isLoading={loadingMode === 'play'}
                 onClick={() => handleExtractUrl('play', pendingUrl)}
-                className="neon-orb-primary py-4 px-3 rounded-2xl font-semibold text-sm text-white flex flex-col items-center justify-center gap-1.5 disabled:opacity-45 active:scale-[0.96] transition"
+                className="py-4 px-3 rounded-2xl font-semibold text-sm flex flex-col items-center justify-center gap-1.5 disabled:opacity-45"
               >
-                <Play className="w-5 h-5 fill-current" />
-                <span>Phát ngay</span>
-              </button>
+                <span className="flex flex-col items-center gap-1.5">
+                  <Play className="w-5 h-5 fill-current" />
+                  <span>Phát ngay</span>
+                </span>
+              </LiquidGlassButton>
 
-              <button
+              <LiquidGlassButton
                 type="button"
+                variant="glass"
                 disabled={!pendingUrl.trim()}
+                isLoading={loadingMode === 'queue'}
                 onClick={() => handleExtractUrl('queue', pendingUrl)}
-                className="liquid-btn py-4 px-3 rounded-2xl font-semibold text-sm text-white flex flex-col items-center justify-center gap-1.5 disabled:opacity-45"
+                className="py-4 px-3 rounded-2xl font-semibold text-sm text-white flex flex-col items-center justify-center gap-1.5 disabled:opacity-45"
               >
-                <ListPlus className="w-5 h-5 text-cyan-300" />
-                <span>Tiếp theo</span>
-              </button>
+                <span className="flex flex-col items-center gap-1.5">
+                  <ListPlus className="w-5 h-5 text-cyan-300" />
+                  <span>Tiếp theo</span>
+                </span>
+              </LiquidGlassButton>
             </div>
           </div>
         </div>
@@ -1725,8 +1744,8 @@ export default function AudioPlayerPage() {
           </button>
         </header>
 
-        {/* KHỐI 1: Ô DÁN LINK KIỂU VIBECONVERT + NÚT GRADIENT CYAN->PINK */}
-        <section className="liquid-glass rounded-3xl p-3.5 space-y-3">
+        {/* KHỐI 1: Ô DÁN LINK KIỂU VIBECONVERT + NÚT LIQUID GLASS (#001 & #228) */}
+        <CursorGlowCard className="p-3.5 space-y-3">
           <div className="flex items-center gap-2 bg-white/5 border border-white/10 rounded-2xl px-3 py-1.5 shadow-inner">
             <div className="w-8 h-8 rounded-xl bg-white/10 flex items-center justify-center shrink-0">
               <Link2 className="w-4 h-4 text-cyan-300" />
@@ -1760,25 +1779,29 @@ export default function AudioPlayerPage() {
           </div>
 
           <div className="grid grid-cols-2 gap-2.5">
-            <button
+            <LiquidGlassButton
               type="button"
+              variant="primary"
               disabled={loadingMode !== null}
+              isLoading={loadingMode === 'play'}
               onClick={() => handleExtractUrl('play', inputUrl)}
-              className="neon-orb-primary py-3 px-4 rounded-2xl font-semibold text-sm text-white transition flex items-center justify-center gap-2 disabled:opacity-60 active:scale-[0.97]"
+              className="py-3 px-4 rounded-2xl font-semibold text-sm flex items-center justify-center gap-2 disabled:opacity-60"
             >
               <Play className="w-4 h-4 fill-current" />
               <span>Phát ngay</span>
-            </button>
+            </LiquidGlassButton>
 
-            <button
+            <LiquidGlassButton
               type="button"
+              variant="glass"
               disabled={loadingMode !== null}
+              isLoading={loadingMode === 'queue'}
               onClick={() => handleExtractUrl('queue', inputUrl)}
-              className="liquid-btn py-3 px-4 rounded-2xl font-semibold text-sm text-cyan-200 flex items-center justify-center gap-2 disabled:opacity-60"
+              className="py-3 px-4 rounded-2xl font-semibold text-sm text-cyan-200 flex items-center justify-center gap-2 disabled:opacity-60"
             >
               <ListPlus className="w-4 h-4 text-cyan-300" />
               <span>+ Tiếp theo</span>
-            </button>
+            </LiquidGlassButton>
           </div>
 
           {error && (
@@ -1787,11 +1810,11 @@ export default function AudioPlayerPage() {
               <span>{error}</span>
             </div>
           )}
-        </section>
+        </CursorGlowCard>
 
-        {/* KHỐI 2: NOW PLAYING CARD (SÓNG ÂM + ẢNH TRÒN Ở GIỮA + ĐIỀU KHIỂN NEON) */}
+        {/* KHỐI 2: NOW PLAYING CARD (SÓNG ÂM + HỆ HÀO QUANG + PLAY MORPH #007 + GLOW #228) */}
         {currentTrack && (
-          <section className="liquid-glass rounded-3xl p-5 space-y-4">
+          <CursorGlowCard ref={nowPlayingCardRef} className="p-5 space-y-4">
             {/* Header Now Playing */}
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0 flex-1 space-y-0.5">
@@ -1829,27 +1852,32 @@ export default function AudioPlayerPage() {
               </button>
             </div>
 
-            {/* Sóng âm Cyan -> Pink + Ảnh đại diện tròn ở giữa giống ảnh gợi ý */}
+            {/* Sóng âm Cyan -> Pink đồng bộ tiến trình + Ảnh đại diện tròn với hào quang xoay */}
             <div className="flex flex-col items-center justify-center gap-3 py-1">
-              <WaveformVisualizer isPlaying={isPlaying} />
+              <WaveformVisualizer
+                isPlaying={isPlaying}
+                progressPct={progressPct}
+                currentTime={currentTime}
+                duration={duration}
+                onSeek={seekToTime}
+              />
 
               <div className="relative">
                 <div
-                  className={`absolute -inset-2 rounded-full bg-gradient-to-tr from-cyan-400/35 via-indigo-400/25 to-pink-500/35 blur-md transition-opacity duration-500 ${
-                    isPlaying ? 'opacity-100' : 'opacity-40'
-                  }`}
+                  className={`la-art-aura ${isPlaying ? 'is-playing' : ''}`}
+                  aria-hidden="true"
                 />
                 <img
                   src={`/api/image-proxy?url=${encodeURIComponent(currentTrack.thumbnail)}`}
                   alt={currentTrack.title}
-                  className={`relative w-24 h-24 rounded-full object-cover border-[3px] border-cyan-400/60 shadow-inner transition-transform duration-500 ${
+                  className={`relative w-24 h-24 rounded-full object-cover border-[3px] border-cyan-300/65 shadow-[0_0_25px_rgba(34,211,238,0.28)] transition-transform duration-500 ${
                     isPlaying ? 'scale-100' : 'scale-95 opacity-90'
                   }`}
                 />
               </div>
             </div>
 
-            {/* Bộ nút điều khiển trung tâm: -5s | << | Play/Pause Orb | >> | +5s */}
+            {/* Bộ nút điều khiển trung tâm: -5s | << | Play/Pause Morph Orb | >> | +5s */}
             <div className="flex items-center justify-between gap-1 pt-1">
               <button
                 type="button"
@@ -1870,17 +1898,11 @@ export default function AudioPlayerPage() {
                 <SkipBack className="w-5 h-5 fill-current" />
               </button>
 
-              <button
-                type="button"
+              <PlayPauseMorphOrb
+                isPlaying={isPlaying}
+                progress={duration > 0 ? currentTime / duration : 0}
                 onClick={togglePlayPause}
-                className="neon-orb-primary w-16 h-16 rounded-full text-white flex items-center justify-center transition active:scale-95"
-              >
-                {isPlaying ? (
-                  <Pause className="w-7 h-7 fill-current" />
-                ) : (
-                  <Play className="w-7 h-7 fill-current ml-0.5" />
-                )}
-              </button>
+              />
 
               <button
                 type="button"
@@ -2026,74 +2048,55 @@ export default function AudioPlayerPage() {
                 </div>
               </div>
             </div>
-          </section>
+          </CursorGlowCard>
         )}
 
-        {/* KHỐI 3: DANH SÁCH TIẾP THEO • GỢI Ý • PLAYLIST • ĐÃ NGHE */}
-        <section className="liquid-glass rounded-3xl p-4 space-y-3.5">
+        {/* KHỐI 3: DANH SÁCH TIẾP THEO • GỢI Ý • PLAYLIST • ĐÃ NGHE (#039 & #228) */}
+        <CursorGlowCard className="p-4 space-y-3.5">
+          <SlidingPillTabs
+            activeTab={activeTab}
+            onChange={(nextTab, dir) => {
+              setTabDirection(dir);
+              setActiveTab(nextTab);
+            }}
+            tabs={[
+              {
+                id: 'queue',
+                label: `Tiếp (${queue.length})`,
+                icon: <ListMusic className="w-3.5 h-3.5 shrink-0" />,
+              },
+              ...(suggestionsEnabled
+                ? [
+                    {
+                      id: 'suggestions' as const,
+                      label: 'Gợi ý',
+                      icon: <Compass className="w-3.5 h-3.5 shrink-0" />,
+                    },
+                  ]
+                : []),
+              {
+                id: 'playlists',
+                label: 'Playlist',
+                icon: <Sparkles className="w-3.5 h-3.5 shrink-0" />,
+              },
+              {
+                id: 'history',
+                label: 'Đã nghe',
+                icon: <History className="w-3.5 h-3.5 shrink-0" />,
+              },
+            ]}
+          />
+
           <div
-            className={`grid ${
-              suggestionsEnabled ? 'grid-cols-4' : 'grid-cols-3'
-            } gap-1 p-1 rounded-2xl bg-black/35 border border-white/10`}
+            key={activeTab}
+            role="tabpanel"
+            className={`u039-panel ${
+              tabDirection > 0 ? 'u039-panel-right' : 'u039-panel-left'
+            }`}
           >
-            <button
-              type="button"
-              onClick={() => setActiveTab('queue')}
-              className={`py-2.5 px-1.5 rounded-xl text-[12px] sm:text-[13px] font-semibold flex items-center justify-center gap-1 transition ${
-                activeTab === 'queue'
-                  ? 'neon-orb-primary text-white shadow'
-                  : 'text-white/70 hover:text-white'
-              }`}
-            >
-              <ListMusic className="w-3.5 h-3.5 shrink-0" />
-              <span>Tiếp ({queue.length})</span>
-            </button>
-
-            {suggestionsEnabled && (
-              <button
-                type="button"
-                onClick={() => setActiveTab('suggestions')}
-                className={`py-2.5 px-1.5 rounded-xl text-[12px] sm:text-[13px] font-semibold flex items-center justify-center gap-1 transition ${
-                  activeTab === 'suggestions'
-                    ? 'neon-orb-primary text-white shadow'
-                    : 'text-white/70 hover:text-white'
-                }`}
-              >
-                <Compass className="w-3.5 h-3.5 shrink-0" />
-                <span>Gợi ý</span>
-              </button>
-            )}
-
-            <button
-              type="button"
-              onClick={() => setActiveTab('playlists')}
-              className={`py-2.5 px-1.5 rounded-xl text-[12px] sm:text-[13px] font-semibold flex items-center justify-center gap-1 transition ${
-                activeTab === 'playlists'
-                  ? 'neon-orb-primary text-white shadow'
-                  : 'text-white/70 hover:text-white'
-              }`}
-            >
-              <Sparkles className="w-3.5 h-3.5 shrink-0" />
-              <span>Playlist</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setActiveTab('history')}
-              className={`py-2.5 px-1.5 rounded-xl text-[12px] sm:text-[13px] font-semibold flex items-center justify-center gap-1 transition ${
-                activeTab === 'history'
-                  ? 'neon-orb-primary text-white shadow'
-                  : 'text-white/70 hover:text-white'
-              }`}
-            >
-              <History className="w-3.5 h-3.5 shrink-0" />
-              <span>Đã nghe</span>
-            </button>
-          </div>
-
-          {/* TAB GỢI Ý BÀI HÁT LIÊN QUAN */}
-          {suggestionsEnabled && activeTab === 'suggestions' && (
-            <div className="space-y-2 max-h-72 overflow-y-auto no-scrollbar">
+            {/* TAB GỢI Ý BÀI HÁT LIÊN QUAN */}
+            {suggestionsEnabled && activeTab === 'suggestions' && (
+              <div className="space-y-2 max-h-72 overflow-y-auto no-scrollbar u039-stagger">
               {!currentTrack ? (
                 <p className="text-center text-sm text-white/50 py-8">
                   Hãy phát 1 bài hát để hiện các bài gợi ý cùng gu nhé!
@@ -2155,7 +2158,7 @@ export default function AudioPlayerPage() {
 
           {/* TAB 1: HÀNG ĐỢI TIẾP THEO */}
           {activeTab === 'queue' && (
-            <div className="space-y-2 max-h-72 overflow-y-auto no-scrollbar">
+            <div className="space-y-2 max-h-72 overflow-y-auto no-scrollbar u039-stagger">
               {queue.length === 0 ? (
                 <p className="text-center text-sm text-white/50 py-8">
                   Danh sách phát trống. Hãy dán link ở trên hoặc chọn bài từ Đã nghe!
@@ -2303,7 +2306,7 @@ export default function AudioPlayerPage() {
                     </div>
                   </div>
 
-                  <div className="space-y-1.5 max-h-56 overflow-y-auto no-scrollbar">
+                  <div className="space-y-1.5 max-h-56 overflow-y-auto no-scrollbar u039-stagger">
                     {selectedPlaylist.tracks.length === 0 ? (
                       <p className="text-center text-sm text-white/50 py-6">
                         Playlist trống. Bấm biểu tượng thư mục (+) trên bài hát để thêm vào đây!
@@ -2359,7 +2362,7 @@ export default function AudioPlayerPage() {
 
           {/* TAB 3: LỊCH SỬ BÀI TỪNG NGHE */}
           {activeTab === 'history' && (
-            <div className="space-y-2 max-h-72 overflow-y-auto no-scrollbar">
+            <div className="space-y-2 max-h-72 overflow-y-auto no-scrollbar u039-stagger">
               {history.length === 0 ? (
                 <p className="text-center text-sm text-white/50 py-8">
                   Lịch sử trống. Các bài từng nghe sẽ lưu lại tại đây để lần sau ấn vô là phát ngay!
@@ -2436,7 +2439,8 @@ export default function AudioPlayerPage() {
               )}
             </div>
           )}
-        </section>
+          </div>
+        </CursorGlowCard>
 
         {/* THẺ <audio> DUY NHẤT CHUẨN iOS SAFARI + CHỐNG LAG TỰ PHỤC HỒI */}
         <audio
@@ -2490,6 +2494,16 @@ export default function AudioPlayerPage() {
           className="hidden"
         />
       </div>
+
+      {/* MINI PLAYER NỔI KHI CUỘN XUỐNG (#218) */}
+      <DockedMiniPlayer
+        track={currentTrack}
+        targetRef={nowPlayingCardRef}
+        isPlaying={isPlaying}
+        progressPct={progressPct}
+        onTogglePlayPause={togglePlayPause}
+        onNextTrack={handleNextTrack}
+      />
     </main>
   );
 }

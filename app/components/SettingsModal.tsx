@@ -20,6 +20,8 @@ import {
   User,
   Sparkles,
 } from 'lucide-react';
+import { StretchySwitch } from './StretchySwitch';
+import { LiquidGlassButton } from './LiquidGlassButton';
 
 interface SyncSession {
   username: string;
@@ -260,23 +262,16 @@ export function SettingsModal({
                 </div>
               )}
 
-              <button
+              <LiquidGlassButton
                 type="submit"
-                disabled={isSubmittingSync || !usernameInput || pinInput.length !== 4}
-                className="neon-orb-primary w-full py-2.5 px-4 rounded-xl text-xs font-semibold text-white flex items-center justify-center gap-2 disabled:opacity-50 active:scale-[0.98] transition"
+                variant="primary"
+                isLoading={isSubmittingSync}
+                disabled={!usernameInput || pinInput.length !== 4}
+                className="w-full py-2.5 px-4 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 disabled:opacity-50"
               >
-                {isSubmittingSync ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>Đang kết nối...</span>
-                  </>
-                ) : (
-                  <>
-                    <Cloud className="w-4 h-4" />
-                    <span>Đăng nhập / Tạo mới</span>
-                  </>
-                )}
-              </button>
+                <Cloud className="w-4 h-4" />
+                <span>Đăng nhập / Tạo mới</span>
+              </LiquidGlassButton>
             </form>
           )}
         </div>
@@ -336,23 +331,11 @@ export function SettingsModal({
             </p>
           </div>
 
-          <button
-            type="button"
-            role="switch"
-            aria-checked={suggestionsEnabled}
-            onClick={() => onToggleSuggestions(!suggestionsEnabled)}
-            className={`relative w-12 h-7 rounded-full transition-colors shrink-0 p-1 ${
-              suggestionsEnabled
-                ? 'bg-gradient-to-r from-cyan-400 to-pink-500 shadow-[0_0_14px_rgba(34,211,238,0.4)]'
-                : 'bg-white/15 border border-white/20'
-            }`}
-          >
-            <span
-              className={`block w-5 h-5 rounded-full bg-white shadow transition-transform ${
-                suggestionsEnabled ? 'translate-x-5' : 'translate-x-0'
-              }`}
-            />
-          </button>
+          <StretchySwitch
+            checked={suggestionsEnabled}
+            onChange={onToggleSuggestions}
+            ariaLabel="Bật hoặc tắt Gợi ý và Tự phát tiếp"
+          />
         </div>
 
         {/* 3. Thanh Âm lượng */}

@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from 'next';
 import './globals.css';
+import './lucian-uxui.css';
 
 export const metadata: Metadata = {
   title: 'LiquidAudio — Nghe nhạc nền iOS',
