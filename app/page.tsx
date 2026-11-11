@@ -30,6 +30,7 @@ import {
   Settings,
   Repeat2,
 } from 'lucide-react';
+import Hls from 'hls.js';
 import { AppleSpinner } from './components/AppleSpinner';
 import { CircularTimerModal } from './components/CircularTimerModal';
 import { Snowfall } from './components/Snowfall';
@@ -40,8 +41,9 @@ import { SettingsModal } from './components/SettingsModal';
 const SILENT_AUDIO_URI =
   'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA';
 
-// Thời gian tối đa coi link stream cũ còn dùng tốt (45 phút)
+// Thời gian tối đa coi link stream cũ còn dùng tốt
 const STREAM_TTL_MS = 45 * 60 * 1000;
+const SOUNDCLOUD_TTL_MS = 4 * 60 * 1000; // SoundCloud signed CloudFront URL hết hạn sau ~6 phút
 
 export type RepeatMode = 'off' | 'once' | 'infinite';
 
@@ -127,6 +129,7 @@ export default function AudioPlayerPage() {
 
   // Refs tránh stale closure cho sự kiện <audio> & MediaSession
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const hlsRef = useRef<Hls | null>(null);
   const popupInputRef = useRef<HTMLInputElement | null>(null);
   const queueRef = useRef<TrackData[]>(queue);
   const historyRef = useRef<TrackData[]>(history);
@@ -416,10 +419,11 @@ export default function AudioPlayerPage() {
 
   const ensureValidAudioUrl = useCallback(
     async (track: TrackData): Promise<TrackData> => {
+      const ttl = track.source === 'soundcloud' ? SOUNDCLOUD_TTL_MS : STREAM_TTL_MS;
       const isExpired =
         !track.audioUrl ||
         !track.extractedAt ||
-        Date.now() - track.extractedAt > STREAM_TTL_MS;
+        Date.now() - track.extractedAt > ttl;
 
       if (!isExpired) return track;
 
@@ -430,6 +434,67 @@ export default function AudioPlayerPage() {
       return { ...refreshed, id: track.id };
     },
     [fetchFreshTrack]
+  );
+
+  // Dọn dẹp Hls.js khi unmount
+  useEffect(() => {
+    return () => {
+      if (hlsRef.current) {
+        hlsRef.current.destroy();
+        hlsRef.current = null;
+      }
+    };
+  }, []);
+
+  // Nạp nguồn phát chuẩn (dùng native <audio> trên Safari iOS và Hls.js cho Chrome/Edge/Android khi gặp SoundCloud .m3u8)
+  const attachAndPlayAudio = useCallback(
+    async (audio: HTMLAudioElement, track: TrackData) => {
+      if (hlsRef.current) {
+        hlsRef.current.destroy();
+        hlsRef.current = null;
+      }
+
+      const isHls =
+        track.audioUrl.includes('.m3u8') ||
+        track.mimeType.toLowerCase().includes('mpegurl');
+
+      if (
+        isHls &&
+        !audio.canPlayType('application/vnd.apple.mpegurl') &&
+        Hls.isSupported()
+      ) {
+        const hls = new Hls({ enableWorker: true });
+        hlsRef.current = hls;
+
+        await new Promise<void>((resolve, reject) => {
+          const timeout = setTimeout(() => {
+            reject(new Error('Tải luồng HLS SoundCloud quá lâu.'));
+          }, 8000);
+
+          hls.on(Hls.Events.MANIFEST_PARSED, () => {
+            clearTimeout(timeout);
+            resolve();
+          });
+          hls.on(Hls.Events.ERROR, (_event, data) => {
+            if (data.fatal) {
+              clearTimeout(timeout);
+              reject(new Error(`Lỗi phát HLS (${data.details})`));
+            }
+          });
+
+          hls.loadSource(track.audioUrl);
+          hls.attachMedia(audio);
+        });
+
+        await audio.play();
+        return;
+      }
+
+      audio.src = track.audioUrl;
+      audio.load();
+      await audio.play();
+    },
+    []
   );
 
   const updateMediaSessionPosition = useCallback(() => {
@@ -476,9 +541,7 @@ export default function AudioPlayerPage() {
           audio.volume = userBaseVolumeRef.current;
         }
 
-        audio.src = targetTrack.audioUrl;
-        audio.load();
-        await audio.play();
+        await attachAndPlayAudio(audio, targetTrack);
 
         setIsPlaying(true);
         addToHistory(targetTrack);
@@ -490,9 +553,7 @@ export default function AudioPlayerPage() {
         try {
           const refreshed = await fetchFreshTrack(targetTrack.originalUrl);
           setQueue((prev) => prev.map((t, idx) => (idx === index ? refreshed : t)));
-          audio.src = refreshed.audioUrl;
-          audio.load();
-          await audio.play();
+          await attachAndPlayAudio(audio, refreshed);
           setIsPlaying(true);
           addToHistory(refreshed);
         } catch (retryErr) {
@@ -503,7 +564,7 @@ export default function AudioPlayerPage() {
         }
       }
     },
-    [addToHistory, ensureValidAudioUrl, fetchFreshTrack]
+    [addToHistory, attachAndPlayAudio, ensureValidAudioUrl, fetchFreshTrack]
   );
 
   const handleNextTrack = useCallback(() => {
@@ -801,10 +862,11 @@ export default function AudioPlayerPage() {
     if (nextIdx >= q.length) return;
 
     const nextTrack = q[nextIdx];
+    const ttl = nextTrack.source === 'soundcloud' ? SOUNDCLOUD_TTL_MS : STREAM_TTL_MS;
     const isExpired =
       !nextTrack.audioUrl ||
       !nextTrack.extractedAt ||
-      Date.now() - nextTrack.extractedAt > STREAM_TTL_MS;
+      Date.now() - nextTrack.extractedAt > ttl;
 
     if (isExpired && prefetchingTrackIdRef.current !== nextTrack.id) {
       prefetchingTrackIdRef.current = nextTrack.id;
@@ -815,12 +877,13 @@ export default function AudioPlayerPage() {
   }, [ensureValidAudioUrl]);
 
   const handleManualInputPaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
-    const pasted = e.clipboardData.getData('text')?.trim();
-    if (pasted) {
+    const raw = e.clipboardData.getData('text')?.trim();
+    if (raw) {
       e.preventDefault();
       e.currentTarget.blur();
-      setInputUrl(pasted);
-      setPendingUrl(pasted);
+      const extracted = raw.match(/https?:\/\/[^\s"'<>]+/i)?.[0] || raw;
+      setInputUrl(extracted);
+      setPendingUrl(extracted);
       setShowLinkActionModal(true);
     }
   };

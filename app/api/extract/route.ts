@@ -5,10 +5,8 @@ import { Ytdl, chooseFormat, Quality } from '@distube/ytdl-core';
 export const runtime = 'nodejs';
 export const maxDuration = 10; // Giới hạn gói miễn phí Vercel (10 giây)
 
-// Tái sử dụng 1 phiên Ytdl để cache visitorData & giải mã nhanh hơn cho các lần gọi sau
 const ytdl = new Ytdl({ timeoutMs: 8000 });
 
-// Cache client_id của SoundCloud trong process để giảm độ trễ giải mã
 let cachedScClientId: string | null = null;
 let cachedScClientIdAt = 0;
 const SC_CLIENT_ID_TTL = 12 * 60 * 60 * 1000;
@@ -105,7 +103,6 @@ async function getSoundCloudClientId(forceRefresh = false): Promise<string> {
     html.matchAll(/src="(https:\/\/a-v2\.sndcdn\.com\/assets\/[^"]+\.js)"/g)
   ).map((m) => m[1]);
 
-  // Quét từ các script cuối cùng (thường chứa client_id trong bundle chính)
   for (const scriptUrl of scriptUrls.slice(-6).reverse()) {
     try {
       const jsRes = await fetch(scriptUrl, { signal: AbortSignal.timeout(4000) });
@@ -126,31 +123,72 @@ async function getSoundCloudClientId(forceRefresh = false): Promise<string> {
 }
 
 /**
- * 3. Xử lý link SoundCloud (hỗ trợ cả link rút gọn on.soundcloud.com / soundcloud.app.goo.gl)
+ * Chuẩn hóa link SoundCloud mobile (m.soundcloud.com) -> soundcloud.com
+ */
+function normalizeSoundCloudUrl(raw: string): string {
+  try {
+    const u = new URL(raw.trim());
+    if (u.hostname === 'm.soundcloud.com' || u.hostname === 'www.soundcloud.com') {
+      u.hostname = 'soundcloud.com';
+    }
+    return `${u.origin}${u.pathname}`.replace(/\/+$/, '');
+  } catch {
+    return raw.trim().split('?')[0].replace('://m.soundcloud.com/', '://soundcloud.com/');
+  }
+}
+
+/**
+ * 3. Xử lý link SoundCloud (hỗ trợ soundcloud.com, m.soundcloud.com, on.soundcloud.com)
  */
 async function extractSoundCloud(url: string): Promise<ExtractedAudio> {
   let targetUrl = url.trim();
 
-  // Mở rộng link rút gọn nếu người dùng share từ app SoundCloud trên iPhone
+  // Mở rộng link rút gọn on.soundcloud.com / soundcloud.app.goo.gl bằng Desktop UA
   if (/on\.soundcloud\.com|soundcloud\.app\.goo\.gl/i.test(targetUrl)) {
     const redirectRes = await fetch(targetUrl, {
       method: 'GET',
       redirect: 'follow',
       headers: {
         'User-Agent':
-          'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
       },
-      signal: AbortSignal.timeout(5000),
+      signal: AbortSignal.timeout(6000),
     });
-    if (redirectRes.url) {
+
+    if (redirectRes.url && /soundcloud\.com\//i.test(redirectRes.url) && !/on\.soundcloud\.com/i.test(redirectRes.url)) {
       targetUrl = redirectRes.url;
+    } else {
+      const html = await redirectRes.text().catch(() => '');
+      const canonical =
+        html.match(/<link[^>]+rel="canonical"[^>]+href="([^"]+)"/i)?.[1] ||
+        html.match(/property="og:url"[^>]+content="([^"]+)"/i)?.[1] ||
+        html.match(/https:\/\/(?:m\.)?soundcloud\.com\/[a-zA-Z0-9_-]+\/[a-zA-Z0-9_-]+/i)?.[0];
+      if (canonical) targetUrl = canonical;
     }
   }
 
-  // Làm sạch tham số tracking (?si=..., ?utm_...)
-  const cleanUrl = targetUrl.split('?')[0];
-
+  const cleanUrl = normalizeSoundCloudUrl(targetUrl);
   let clientId = await getSoundCloudClientId();
+
+  interface ScTrack {
+    id?: number;
+    kind?: string;
+    title?: string;
+    artwork_url?: string;
+    track_authorization?: string;
+    user?: { username?: string; avatar_url?: string };
+    media?: {
+      transcodings?: Array<{
+        url: string;
+        format?: { protocol?: string; mime_type?: string };
+      }>;
+    };
+    tracks?: ScTrack[];
+  }
+
+  let data: ScTrack | null = null;
+
+  // Thử api-v2.soundcloud.com/resolve
   let resolveRes = await fetch(
     `https://api-v2.soundcloud.com/resolve?url=${encodeURIComponent(
       cleanUrl
@@ -161,7 +199,6 @@ async function extractSoundCloud(url: string): Promise<ExtractedAudio> {
     }
   );
 
-  // Thử làm mới client_id 1 lần nếu bị hết hạn (401/403)
   if (resolveRes.status === 401 || resolveRes.status === 403) {
     clientId = await getSoundCloudClientId(true);
     resolveRes = await fetch(
@@ -175,55 +212,85 @@ async function extractSoundCloud(url: string): Promise<ExtractedAudio> {
     );
   }
 
-  if (!resolveRes.ok) {
-    throw new Error('Link SoundCloud không tồn tại hoặc bị đặt riêng tư.');
+  if (resolveRes.ok) {
+    data = (await resolveRes.json()) as ScTrack;
+  } else {
+    // Fallback: đọc trực tiếp hydration JSON từ trang web SoundCloud
+    const pageRes = await fetch(cleanUrl, {
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+      },
+      signal: AbortSignal.timeout(6000),
+    });
+    if (pageRes.ok) {
+      const html = await pageRes.text();
+      const hydMatch = html.match(/window\.__sc_hydration\s*=\s*(\[[\s\S]*?\]);<\/script>/);
+      if (hydMatch?.[1]) {
+        const hyd = JSON.parse(hydMatch[1]) as Array<{ hydratable?: string; data?: ScTrack }>;
+        data = hyd.find((x) => x.hydratable === 'sound')?.data || null;
+      }
+    }
   }
 
-  const data = await resolveRes.json();
+  if (!data) {
+    throw new Error('Không tìm thấy bài hát SoundCloud này (link sai hoặc riêng tư).');
+  }
 
-  // Nếu là link playlist/set, lấy bài đầu tiên có stream
   const track =
     data.kind === 'playlist' && Array.isArray(data.tracks)
-      ? data.tracks.find((t: { media?: { transcodings?: unknown[] } }) => t?.media?.transcodings?.length)
+      ? data.tracks.find((t) => (t?.media?.transcodings?.length || 0) > 0)
       : data;
 
-  if (!track || !track.media?.transcodings?.length) {
-    throw new Error('Không tìm thấy luồng âm thanh khả dụng cho bài SoundCloud này.');
+  const transcodings = track?.media?.transcodings || [];
+  if (!track || transcodings.length === 0) {
+    throw new Error('Bài SoundCloud này không có luồng phát công khai.');
   }
 
-  const transcodings: Array<{
-    url: string;
-    format?: { protocol?: string; mime_type?: string };
-  }> = track.media.transcodings;
-
-  // Ưu tiên: 1. Progressive MP3 (chạy mọi trình duyệt) -> 2. HLS MP4/AAC (chuẩn iOS Safari) -> 3. HLS bất kỳ
-  const picked =
-    transcodings.find((t) => t.format?.protocol === 'progressive') ||
-    transcodings.find(
-      (t) => t.format?.protocol === 'hls' && t.format?.mime_type?.includes('audio/mp4')
-    ) ||
-    transcodings[0];
-
-  if (!picked?.url) {
-    throw new Error('Bài SoundCloud này bị giới hạn bản quyền (Go+/Preview).');
-  }
-
-  const streamEndpoint = picked.url.includes('?')
-    ? `${picked.url}&client_id=${clientId}`
-    : `${picked.url}?client_id=${clientId}`;
-
-  const streamRes = await fetch(streamEndpoint, {
-    headers: { Accept: 'application/json' },
-    signal: AbortSignal.timeout(5000),
+  // Sắp xếp thứ tự ưu tiên: 1. Progressive MP3 -> 2. HLS MP4/AAC -> 3. Các HLS còn lại
+  const sortedTranscodings = [...transcodings].sort((a, b) => {
+    const score = (t: typeof a) => {
+      if (t.format?.protocol === 'progressive') return 0;
+      if (t.format?.protocol === 'hls' && t.format?.mime_type?.includes('audio/mp4')) return 1;
+      return 2;
+    };
+    return score(a) - score(b);
   });
 
-  if (!streamRes.ok) {
-    throw new Error('Không lấy được đường dẫn phát nhạc từ SoundCloud.');
+  let finalStreamUrl = '';
+  let finalMime = 'audio/mpeg';
+
+  // Thử từng transcoding kèm client_id và track_authorization đến khi lấy được URL hợp lệ
+  for (const candidate of sortedTranscodings) {
+    try {
+      const endpoint = new URL(candidate.url);
+      endpoint.searchParams.set('client_id', clientId);
+      if (track.track_authorization) {
+        endpoint.searchParams.set('track_authorization', track.track_authorization);
+      }
+
+      const streamRes = await fetch(endpoint.toString(), {
+        headers: { Accept: 'application/json' },
+        signal: AbortSignal.timeout(4500),
+      });
+      if (!streamRes.ok) continue;
+
+      const streamJson = await streamRes.json();
+      if (streamJson?.url) {
+        finalStreamUrl = streamJson.url;
+        finalMime =
+          candidate.format?.protocol === 'hls' && finalStreamUrl.includes('.m3u8')
+            ? 'application/vnd.apple.mpegurl'
+            : candidate.format?.mime_type?.split(';')[0] || 'audio/mpeg';
+        break;
+      }
+    } catch {
+      continue;
+    }
   }
 
-  const streamJson = await streamRes.json();
-  if (!streamJson?.url) {
-    throw new Error('SoundCloud không trả về URL âm thanh.');
+  if (!finalStreamUrl) {
+    throw new Error('Bài SoundCloud này bị giới hạn bản quyền (Go+/Preview).');
   }
 
   const rawThumb =
@@ -234,20 +301,19 @@ async function extractSoundCloud(url: string): Promise<ExtractedAudio> {
 
   return {
     id: `sc_${track.id || Date.now()}`,
-    originalUrl: url,
-    audioUrl: streamJson.url,
+    originalUrl: cleanUrl,
+    audioUrl: finalStreamUrl,
     title: track.title || 'SoundCloud Track',
     author: track.user?.username || 'SoundCloud Artist',
     thumbnail: hdThumb,
     source: 'soundcloud',
-    mimeType: picked.format?.mime_type?.split(';')[0] || 'audio/mpeg',
+    mimeType: finalMime,
     extractedAt: Date.now(),
   };
 }
 
 /**
  * 4. Xử lý link YouTube bằng @distube/ytdl-core v5 (ưu tiên M4A/MP4 cho iOS Safari)
- * và fallback qua Piped API công cộng nếu cần.
  */
 async function extractYouTube(url: string): Promise<ExtractedAudio> {
   const videoIdMatch = url.match(
@@ -358,11 +424,15 @@ async function extractYouTube(url: string): Promise<ExtractedAudio> {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const rawUrl = (body?.url || '').trim();
+    const rawInput = String(body?.url || '').trim();
 
-    if (!rawUrl) {
+    if (!rawInput) {
       return NextResponse.json({ error: 'Vui lòng nhập đường dẫn (URL).' }, { status: 400 });
     }
+
+    // Tự tách URL hợp lệ nếu người dùng copy cả câu mô tả từ app TikTok / SoundCloud
+    const urlMatch = rawInput.match(/https?:\/\/[^\s"'<>]+/i);
+    const rawUrl = (urlMatch ? urlMatch[0] : rawInput).trim();
 
     const isTikTok = /tiktok\.com/i.test(rawUrl);
     const isYouTube = /(youtube\.com|youtu\.be)/i.test(rawUrl);
