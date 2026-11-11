@@ -59,11 +59,22 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(spResult.track, { status: 200 });
     }
 
+    const fallbackMeta =
+      body?.fallbackMeta && typeof body.fallbackMeta === 'object'
+        ? {
+            title: body.fallbackMeta.title ? String(body.fallbackMeta.title) : undefined,
+            author: body.fallbackMeta.author ? String(body.fallbackMeta.author) : undefined,
+            thumbnail: body.fallbackMeta.thumbnail
+              ? String(body.fallbackMeta.thumbnail)
+              : undefined,
+          }
+        : undefined;
+
     const result = isTikTok
       ? await extractTikTok(rawUrl)
       : isSoundCloud
       ? await extractSoundCloud(rawUrl)
-      : await extractYouTube(rawUrl);
+      : await extractYouTube(rawUrl, fallbackMeta);
 
     return NextResponse.json(result, { status: 200 });
   } catch (err: unknown) {

@@ -418,17 +418,112 @@ export async function extractTikTok(url: string): Promise<ExtractedAudio> {
   return extractTikTokMusicPage(url);
 }
 
+interface FallbackTrackMeta {
+  title?: string;
+  author?: string;
+  thumbnail?: string;
+  originalUrl?: string;
+  source?: AudioSource;
+  id?: string;
+}
+
 /**
- * Trích xuất YouTube (ưu tiên M4A/MP4 cho iOS Safari)
+ * Tìm & giải mã luồng phát trực tiếp từ SoundCloud theo từ khóa
  */
-export async function extractYouTube(url: string): Promise<ExtractedAudio> {
+async function searchSoundCloudAudio(
+  query: string,
+  meta?: FallbackTrackMeta
+): Promise<ExtractedAudio | null> {
+  if (!query.trim()) return null;
+  try {
+    const cid = await getSoundCloudClientId();
+    const searchRes = await fetch(
+      `https://api-v2.soundcloud.com/search/tracks?q=${encodeURIComponent(
+        query
+      )}&limit=6&client_id=${cid}`,
+      { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(4500) }
+    );
+    if (!searchRes.ok) return null;
+
+    const searchJson = await searchRes.json();
+    const tracks = (searchJson?.collection || []) as ScTrackRaw[];
+    for (const scTrack of tracks) {
+      const stream = await resolveSoundCloudStream(scTrack, cid);
+      if (stream) {
+        const thumb = (
+          meta?.thumbnail ||
+          scTrack.artwork_url ||
+          scTrack.user?.avatar_url ||
+          'https://placehold.co/512x512/18181b/ffffff.jpg?text=Audio'
+        ).replace('-large', '-t500x500');
+        return {
+          id: meta?.id || `sc_${scTrack.id || Date.now()}`,
+          originalUrl: meta?.originalUrl || scTrack.permalink_url || '',
+          audioUrl: stream.audioUrl,
+          title: meta?.title || scTrack.title || query,
+          author: meta?.author || scTrack.user?.username || 'Artist',
+          thumbnail: thumb,
+          source: meta?.source && meta.source !== 'youtube' ? meta.source : 'soundcloud',
+          mimeType: stream.mimeType,
+          extractedAt: Date.now(),
+        };
+      }
+    }
+  } catch {}
+  return null;
+}
+
+async function probeAudioRange(url: string, referer?: string): Promise<boolean> {
+  try {
+    const headers: Record<string, string> = {
+      'User-Agent': DESKTOP_UA,
+      Range: 'bytes=0-1023',
+    };
+    if (referer) headers.Referer = referer;
+    const res = await fetch(url, {
+      headers,
+      redirect: 'follow',
+      signal: AbortSignal.timeout(2500),
+    });
+    try {
+      await res.body?.cancel();
+    } catch {}
+    return res.status === 200 || res.status === 206;
+  } catch {
+    return false;
+  }
+}
+
+function wrapYouTubeProxyIfNeeded(directUrl: string): string {
+  if (/googlevideo\.com/i.test(directUrl)) {
+    return `/api/audio-proxy?url=${encodeURIComponent(directUrl)}`;
+  }
+  return directUrl;
+}
+
+/**
+ * Trích xuất YouTube (ưu tiên M4A/MP4 + proxy tránh lỗi IP Vercel/5G + fallback SoundCloud tự động)
+ */
+export async function extractYouTube(
+  url: string,
+  fallbackMeta?: FallbackTrackMeta
+): Promise<ExtractedAudio> {
   const videoIdMatch = url.match(
     /(?:youtu\.be\/|youtube\.com\/(?:.*v=|.*\/|.*embed\/|.*shorts\/))([^&?/]+)/
   );
   const videoId = videoIdMatch ? videoIdMatch[1] : `${Date.now()}`;
 
+  let detectedTitle = fallbackMeta?.title || '';
+  let detectedAuthor = fallbackMeta?.author || '';
+  let detectedThumb =
+    fallbackMeta?.thumbnail ||
+    (videoIdMatch ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` : '');
+
   try {
-    const info = await ytdl.getInfo(url, { signal: AbortSignal.timeout(8000) });
+    const info = await ytdl.getInfo(url, { signal: AbortSignal.timeout(5500) });
+    detectedTitle = detectedTitle || info.videoDetails.title || '';
+    detectedAuthor = detectedAuthor || info.videoDetails.author?.name || '';
+
     const directFormats = info.formats.filter((f) => Boolean(f.url) && !f.isDrm && !f.isOtf);
 
     let chosenFormat = null;
@@ -453,69 +548,115 @@ export async function extractYouTube(url: string): Promise<ExtractedAudio> {
     if (chosenFormat?.url) {
       const thumbnails = info.videoDetails.thumbnails;
       const bestThumb =
+        detectedThumb ||
         thumbnails.find((t) => t.url.includes('.jpg'))?.url ||
         thumbnails[thumbnails.length - 1]?.url ||
         `https://i.ytimg.com/vi/${info.videoDetails.id || videoId}/hqdefault.jpg`;
 
-      return {
-        id: `yt_${info.videoDetails.id || videoId}`,
-        originalUrl: url,
-        audioUrl: chosenFormat.url,
-        title: info.videoDetails.title || 'YouTube Audio',
-        author: info.videoDetails.author?.name || 'YouTube Channel',
-        thumbnail: bestThumb,
-        source: 'youtube',
-        mimeType: chosenFormat.mimeType?.split(';')[0] || 'audio/mp4',
-        extractedAt: Date.now(),
-      };
-    }
-  } catch (ytdlError) {
-    console.warn('ytdl-core v5 gặp sự cố, thử Piped API fallback...', ytdlError);
-  }
-
-  if (!videoIdMatch) {
-    throw new Error('Không nhận diện được Video ID của YouTube.');
-  }
-
-  const pipedInstances = [
-    'https://pipedapi.kavin.rocks',
-    'https://api.piped.private.coffee',
-  ];
-
-  for (const instance of pipedInstances) {
-    try {
-      const res = await fetch(`${instance}/streams/${videoId}`, {
-        headers: { Accept: 'application/json' },
-        signal: AbortSignal.timeout(3500),
-      });
-      if (!res.ok) continue;
-
-      const data = await res.json();
-      const audioStreams: Array<{ url: string; mimeType: string }> = data.audioStreams || [];
-      const m4aStream =
-        audioStreams.find((s) => s.mimeType?.includes('audio/mp4')) || audioStreams[0];
-
-      if (m4aStream?.url) {
+      // Kiểm chứng nhanh stream không bị 403 trên IP server trước khi trả về client
+      const ok = await probeAudioRange(chosenFormat.url, 'https://www.youtube.com/');
+      if (ok) {
         return {
-          id: `yt_${videoId}`,
+          id: `yt_${info.videoDetails.id || videoId}`,
           originalUrl: url,
-          audioUrl: m4aStream.url,
-          title: data.title || 'YouTube Audio',
-          author: data.uploader || 'YouTube',
-          thumbnail:
-            data.thumbnailUrl || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+          audioUrl: wrapYouTubeProxyIfNeeded(chosenFormat.url),
+          title: detectedTitle || 'YouTube Audio',
+          author: detectedAuthor || 'YouTube Channel',
+          thumbnail: bestThumb,
           source: 'youtube',
-          mimeType: m4aStream.mimeType || 'audio/mp4',
+          mimeType: chosenFormat.mimeType?.split(';')[0] || 'audio/mp4',
           extractedAt: Date.now(),
         };
       }
-    } catch {
-      continue;
+    }
+  } catch (ytdlError) {
+    console.warn('ytdl-core v5 gặp sự cố, chuyển fallback...', ytdlError);
+  }
+
+  // Fallback 1: Đọc metadata qua YouTube oEmbed nếu chưa có title/author
+  if (videoIdMatch && (!detectedTitle || !detectedAuthor)) {
+    try {
+      const oeRes = await fetch(
+        `https://www.youtube.com/oembed?url=${encodeURIComponent(
+          `https://www.youtube.com/watch?v=${videoId}`
+        )}&format=json`,
+        { signal: AbortSignal.timeout(2500) }
+      );
+      if (oeRes.ok) {
+        const oe = await oeRes.json();
+        detectedTitle = detectedTitle || oe?.title || '';
+        detectedAuthor = detectedAuthor || oe?.author_name || '';
+        detectedThumb = detectedThumb || oe?.thumbnail_url || '';
+      }
+    } catch {}
+  }
+
+  // Fallback 2: Tự động tìm bản full tương ứng trên SoundCloud (ổn định trên IP Vercel)
+  if (detectedTitle) {
+    const cleanAuthor = detectedAuthor.replace(/\s*-\s*Topic$/i, '').trim();
+    const { query } = cleanTrackQuery(detectedTitle, cleanAuthor);
+
+    const scByFullQuery = await searchSoundCloudAudio(query, {
+      id: `yt_${videoId}`,
+      originalUrl: url,
+      title: detectedTitle,
+      author: cleanAuthor || 'YouTube',
+      thumbnail: detectedThumb || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+      source: 'soundcloud',
+    });
+    if (scByFullQuery) return scByFullQuery;
+
+    if (cleanAuthor) {
+      const scByTitleOnly = await searchSoundCloudAudio(
+        cleanTrackQuery(detectedTitle).query,
+        {
+          id: `yt_${videoId}`,
+          originalUrl: url,
+          title: detectedTitle,
+          author: cleanAuthor,
+          thumbnail: detectedThumb || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+          source: 'soundcloud',
+        }
+      );
+      if (scByTitleOnly) return scByTitleOnly;
     }
   }
 
+  // Fallback 3: Piped instance công khai
+  if (videoIdMatch) {
+    try {
+      const res = await fetch(`https://api.piped.private.coffee/streams/${videoId}`, {
+        headers: { Accept: 'application/json' },
+        signal: AbortSignal.timeout(2500),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const audioStreams: Array<{ url: string; mimeType: string }> = data.audioStreams || [];
+        const m4aStream =
+          audioStreams.find((s) => s.mimeType?.includes('audio/mp4')) || audioStreams[0];
+
+        if (m4aStream?.url) {
+          return {
+            id: `yt_${videoId}`,
+            originalUrl: url,
+            audioUrl: m4aStream.url,
+            title: detectedTitle || data.title || 'YouTube Audio',
+            author: detectedAuthor || data.uploader || 'YouTube',
+            thumbnail:
+              detectedThumb ||
+              data.thumbnailUrl ||
+              `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+            source: 'youtube',
+            mimeType: m4aStream.mimeType || 'audio/mp4',
+            extractedAt: Date.now(),
+          };
+        }
+      }
+    } catch {}
+  }
+
   throw new Error(
-    'Không thể trích xuất âm thanh YouTube lúc này. Vui lòng thử link khác hoặc link TikTok/SoundCloud.'
+    'Không thể trích xuất âm thanh YouTube lúc này. Vui lòng thử bài khác hoặc tìm bản SoundCloud/TikTok trong tab Gợi ý.'
   );
 }
 
@@ -524,19 +665,23 @@ export async function extractYouTube(url: string): Promise<ExtractedAudio> {
  */
 export async function searchAndExtractByQuery(
   query: string,
-  meta?: { title?: string; author?: string; thumbnail?: string; originalUrl?: string; source?: AudioSource; id?: string }
+  meta?: FallbackTrackMeta
 ): Promise<ExtractedAudio> {
   // Ưu tiên 1: Tìm bài hát trên YouTube Music
   try {
     const songs = await ytdl.search(query, {
       type: SearchType.Song,
       limit: 3,
-      signal: AbortSignal.timeout(5000),
+      signal: AbortSignal.timeout(4500),
     });
     for (const song of songs) {
       if (!song.url) continue;
       try {
-        const yt = await extractYouTube(song.url);
+        const yt = await extractYouTube(song.url, {
+          title: meta?.title || song.title,
+          author: meta?.author || song.author?.name,
+          thumbnail: meta?.thumbnail || song.thumbnails?.[song.thumbnails.length - 1]?.url,
+        });
         return {
           ...yt,
           id: meta?.id || yt.id,
@@ -544,7 +689,7 @@ export async function searchAndExtractByQuery(
           title: meta?.title || yt.title,
           author: meta?.author || yt.author,
           thumbnail: meta?.thumbnail || yt.thumbnail,
-          source: meta?.source || yt.source,
+          source: meta?.source && yt.source === 'youtube' ? meta.source : yt.source,
         };
       } catch {
         continue;
@@ -553,41 +698,8 @@ export async function searchAndExtractByQuery(
   } catch {}
 
   // Ưu tiên 2: Fallback sang SoundCloud Search
-  try {
-    const cid = await getSoundCloudClientId();
-    const searchRes = await fetch(
-      `https://api-v2.soundcloud.com/search/tracks?q=${encodeURIComponent(
-        query
-      )}&limit=5&client_id=${cid}`,
-      { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(5000) }
-    );
-    if (searchRes.ok) {
-      const searchJson = await searchRes.json();
-      const tracks = (searchJson?.collection || []) as ScTrackRaw[];
-      for (const scTrack of tracks) {
-        const stream = await resolveSoundCloudStream(scTrack, cid);
-        if (stream) {
-          const thumb = (
-            meta?.thumbnail ||
-            scTrack.artwork_url ||
-            scTrack.user?.avatar_url ||
-            'https://placehold.co/512x512/18181b/ffffff.jpg?text=Audio'
-          ).replace('-large', '-t500x500');
-          return {
-            id: meta?.id || `sc_${scTrack.id || Date.now()}`,
-            originalUrl: meta?.originalUrl || scTrack.permalink_url || '',
-            audioUrl: stream.audioUrl,
-            title: meta?.title || scTrack.title || query,
-            author: meta?.author || scTrack.user?.username || 'Artist',
-            thumbnail: thumb,
-            source: meta?.source || 'soundcloud',
-            mimeType: stream.mimeType,
-            extractedAt: Date.now(),
-          };
-        }
-      }
-    }
-  } catch {}
+  const scResult = await searchSoundCloudAudio(query, meta);
+  if (scResult) return scResult;
 
   throw new Error(`Không tìm thấy bản phát trực tuyến cho "${query}".`);
 }
@@ -832,10 +944,57 @@ function dedupeSuggestions(items: SuggestedTrack[]): SuggestedTrack[] {
   return out;
 }
 
-/**
- * Lấy danh sách bài gợi ý (Related Tracks) theo bài đang nghe (ưu tiên khu vực VN & giữ gu nhạc Việt)
- */
-export async function getRelatedTracks(input: {
+const DISCOVERY_CACHE_TTL = 5 * 60 * 1000;
+const relatedPoolCache = new Map<string, { items: SuggestedTrack[]; at: number }>();
+const ytSearchCache = new Map<string, { items: SuggestedTrack[]; at: number }>();
+
+function setBoundedCache<T>(
+  map: Map<string, { items: T; at: number }>,
+  key: string,
+  items: T,
+  maxSize = 60
+) {
+  if (map.size >= maxSize) {
+    const oldestKey = map.keys().next().value;
+    if (oldestKey) map.delete(oldestKey);
+  }
+  map.set(key, { items, at: Date.now() });
+}
+
+function getValidCached<T>(
+  map: Map<string, { items: T; at: number }>,
+  key: string
+): T | null {
+  const hit = map.get(key);
+  if (!hit) return null;
+  if (Date.now() - hit.at > DISCOVERY_CACHE_TTL) {
+    map.delete(key);
+    return null;
+  }
+  return hit.items;
+}
+
+function mapScTracks(items: readonly ScTrackRaw[]): SuggestedTrack[] {
+  const out: SuggestedTrack[] = [];
+  for (const t of items) {
+    if (!t.permalink_url || !t.title) continue;
+    out.push({
+      id: `sc_${t.id || Date.now()}`,
+      url: t.permalink_url,
+      title: t.title,
+      author: t.user?.username || 'SoundCloud',
+      thumbnail: (
+        t.artwork_url ||
+        t.user?.avatar_url ||
+        'https://placehold.co/512x512/18181b/ffffff.jpg?text=SoundCloud'
+      ).replace('-large', '-t500x500'),
+      source: 'soundcloud',
+    });
+  }
+  return out;
+}
+
+async function computeRelatedTrackPool(input: {
   id?: string;
   originalUrl?: string;
   title?: string;
@@ -848,7 +1007,7 @@ export async function getRelatedTracks(input: {
   const preferVietnamese =
     isLikelyVietnamese(seedText) || source === 'tiktok';
 
-  // 1. YouTube -> Dùng YouTube Music Radio + Related Videos khu vực VN
+  // 1. YouTube -> Dùng YouTube Music Radio + Related Videos khu vực VN (tới ~40 bài để scroll tải thêm)
   if (source === 'youtube' && /youtube\.com|youtu\.be/i.test(originalUrl)) {
     try {
       const [musicRelated, videoRelated] = await Promise.all([
@@ -872,12 +1031,12 @@ export async function getRelatedTracks(input: {
       ]);
 
       const ranked = prioritizeVietnamese(merged, preferVietnamese);
-      if (ranked.length > 0) return ranked.slice(0, 8);
+      if (ranked.length > 0) return ranked.slice(0, 36);
     } catch {}
   }
 
-  // 2. SoundCloud -> Dùng Related Tracks API, nếu seed là nhạc Việt thì bổ sung thêm YouTube VN để tránh bị loãng sang nhạc US/EDM
-  const scSuggestions: SuggestedTrack[] = [];
+  // 2. SoundCloud -> Dùng Related Tracks API
+  let scSuggestions: SuggestedTrack[] = [];
   if (source === 'soundcloud') {
     try {
       const cid = await getSoundCloudClientId();
@@ -885,27 +1044,12 @@ export async function getRelatedTracks(input: {
 
       if (numericId) {
         const relRes = await fetch(
-          `https://api-v2.soundcloud.com/tracks/${numericId}/related?limit=10&client_id=${cid}`,
+          `https://api-v2.soundcloud.com/tracks/${numericId}/related?limit=25&client_id=${cid}`,
           { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(5000) }
         );
         if (relRes.ok) {
           const relJson = await relRes.json();
-          const items = (relJson?.collection || []) as ScTrackRaw[];
-          for (const t of items) {
-            if (!t.permalink_url || !t.title) continue;
-            scSuggestions.push({
-              id: `sc_${t.id || Date.now()}`,
-              url: t.permalink_url,
-              title: t.title,
-              author: t.user?.username || 'SoundCloud',
-              thumbnail: (
-                t.artwork_url ||
-                t.user?.avatar_url ||
-                'https://placehold.co/512x512/18181b/ffffff.jpg?text=SoundCloud'
-              ).replace('-large', '-t500x500'),
-              source: 'soundcloud',
-            });
-          }
+          scSuggestions = mapScTracks((relJson?.collection || []) as ScTrackRaw[]);
         }
       }
     } catch {}
@@ -914,23 +1058,23 @@ export async function getRelatedTracks(input: {
       isLikelyVietnamese(`${t.title} ${t.author}`)
     );
     if (!preferVietnamese && scSuggestions.length > 0) {
-      return scSuggestions.slice(0, 8);
+      return scSuggestions.slice(0, 30);
     }
-    if (preferVietnamese && viSc.length >= 5) {
-      return prioritizeVietnamese(scSuggestions, true).slice(0, 8);
+    if (preferVietnamese && viSc.length >= 6) {
+      return prioritizeVietnamese(scSuggestions, true).slice(0, 30);
     }
   }
 
-  // 3. Spotify / TikTok / SoundCloud nhạc Việt cần bổ sung -> Tìm qua YouTube Music & YouTube VN theo tên bài
+  // 3. Spotify / TikTok / SoundCloud nhạc Việt -> YouTube Music & SoundCloud
   const { query, isGenericSound } = cleanTrackQuery(input.title, input.author);
-  if (!query) return scSuggestions.slice(0, 8);
+  if (!query) return scSuggestions.slice(0, 24);
 
   const ytSuggestions: SuggestedTrack[] = [];
 
   try {
     const songs = await ytdl.search(query, {
       type: SearchType.Song,
-      limit: 6,
+      limit: 12,
       signal: AbortSignal.timeout(5000),
     });
 
@@ -941,15 +1085,13 @@ export async function getRelatedTracks(input: {
       ytSuggestions.push(...mapYtSummaries(radio, originalUrl));
     }
 
-    if (ytSuggestions.length < 6) {
-      ytSuggestions.push(...mapYtSummaries(songs, originalUrl));
-    }
+    ytSuggestions.push(...mapYtSummaries(songs, originalUrl));
 
-    if (ytSuggestions.length < 4) {
+    if (ytSuggestions.length < 15) {
       const videos = await ytdl
         .search(preferVietnamese ? `${query} nhạc việt` : query, {
           type: SearchType.Video,
-          limit: 6,
+          limit: 12,
           signal: AbortSignal.timeout(4500),
         })
         .catch(() => []);
@@ -964,7 +1106,7 @@ export async function getRelatedTracks(input: {
   );
 
   if (combined.length > 0) {
-    return prioritizeVietnamese(combined, preferVietnamese).slice(0, 8);
+    return prioritizeVietnamese(combined, preferVietnamese).slice(0, 36);
   }
 
   // Fallback cuối cùng sang SoundCloud Search nếu YouTube không trả về kết quả
@@ -973,31 +1115,382 @@ export async function getRelatedTracks(input: {
     const scRes = await fetch(
       `https://api-v2.soundcloud.com/search/tracks?q=${encodeURIComponent(
         query
-      )}&limit=6&client_id=${cid}`,
+      )}&limit=15&client_id=${cid}`,
       { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(4500) }
     );
     if (scRes.ok) {
       const scJson = await scRes.json();
-      const items = (scJson?.collection || []) as ScTrackRaw[];
-      const out: SuggestedTrack[] = [];
-      for (const t of items) {
-        if (!t.permalink_url || !t.title) continue;
-        out.push({
-          id: `sc_${t.id || Date.now()}`,
-          url: t.permalink_url,
-          title: t.title,
-          author: t.user?.username || 'SoundCloud',
-          thumbnail: (
-            t.artwork_url ||
-            t.user?.avatar_url ||
-            'https://placehold.co/512x512/18181b/ffffff.jpg?text=SoundCloud'
-          ).replace('-large', '-t500x500'),
-          source: 'soundcloud',
-        });
-      }
-      return prioritizeVietnamese(out, preferVietnamese).slice(0, 8);
+      const out = mapScTracks((scJson?.collection || []) as ScTrackRaw[]);
+      return prioritizeVietnamese(out, preferVietnamese).slice(0, 24);
     }
   } catch {}
 
   return [];
+}
+
+/**
+ * Lấy từng trang bài gợi ý (hỗ trợ kéo xuống tải thêm)
+ */
+export async function getRelatedTracksPage(input: {
+  id?: string;
+  originalUrl?: string;
+  title?: string;
+  author?: string;
+  source?: AudioSource;
+  offset?: number;
+  limit?: number;
+}): Promise<{
+  suggestions: SuggestedTrack[];
+  hasMore: boolean;
+  nextOffset: number;
+}> {
+  const offset = Math.max(0, Number(input.offset) || 0);
+  const limit = Math.min(20, Math.max(4, Number(input.limit) || 10));
+  const cacheKey = `${input.source || 'yt'}:${input.originalUrl || ''}:${input.title || ''}`;
+
+  let pool = getValidCached(relatedPoolCache, cacheKey);
+  if (!pool) {
+    pool = await computeRelatedTrackPool(input);
+    if (pool.length > 0) {
+      setBoundedCache(relatedPoolCache, cacheKey, pool);
+    }
+  }
+
+  const pageItems = pool.slice(offset, offset + limit);
+  const nextOffset = offset + pageItems.length;
+  return {
+    suggestions: pageItems,
+    hasMore: nextOffset < pool.length,
+    nextOffset,
+  };
+}
+
+/**
+ * Wrapper giữ tương thích gọi 1 lần mặc định
+ */
+export async function getRelatedTracks(input: {
+  id?: string;
+  originalUrl?: string;
+  title?: string;
+  author?: string;
+  source?: AudioSource;
+}): Promise<SuggestedTrack[]> {
+  const { suggestions } = await getRelatedTracksPage({ ...input, offset: 0, limit: 10 });
+  return suggestions;
+}
+
+function buildHashtagCandidates(rawQuery: string): string[] {
+  const stripped = rawQuery
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/đ/gi, 'd')
+    .toLowerCase();
+
+  const words = stripped
+    .split(/[^a-z0-9]+/)
+    .map((w) => w.trim())
+    .filter(Boolean);
+
+  const candidates: string[] = [];
+  if (words.length > 0) {
+    candidates.push(words.join(''));
+    if (words.length >= 2) {
+      candidates.push(words.slice(0, 2).join(''));
+    }
+    if (words.length >= 3) {
+      candidates.push(words.slice(-2).join(''));
+    }
+    const longest = [...words].sort((a, b) => b.length - a.length)[0];
+    if (longest && longest.length >= 3) {
+      candidates.push(longest);
+    }
+  }
+
+  return Array.from(new Set(candidates)).filter((s) => s.length >= 2);
+}
+
+interface TikWmVideoRaw {
+  video_id?: string;
+  id?: string;
+  title?: string;
+  cover?: string;
+  origin_cover?: string;
+  author?: { nickname?: string; unique_id?: string; avatar?: string };
+  music_info?: { title?: string; author?: string };
+}
+
+function mapTikWmVideos(videos: readonly TikWmVideoRaw[]): SuggestedTrack[] {
+  const out: SuggestedTrack[] = [];
+  const seen = new Set<string>();
+  for (const v of videos) {
+    const vid = v.video_id || v.id;
+    if (!vid || seen.has(vid)) continue;
+    seen.add(vid);
+
+    const uniqueId = v.author?.unique_id;
+    const videoUrl = uniqueId
+      ? `https://www.tiktok.com/@${uniqueId}/video/${vid}`
+      : `https://www.tiktok.com/video/${vid}`;
+
+    out.push({
+      id: `tt_${vid}`,
+      url: videoUrl,
+      title: v.title?.trim() || v.music_info?.title || 'TikTok Sound',
+      author: v.author?.nickname || v.music_info?.author || 'TikTok',
+      thumbnail:
+        v.origin_cover ||
+        v.cover ||
+        v.author?.avatar ||
+        'https://placehold.co/512x512/18181b/ffffff.jpg?text=TikTok',
+      source: 'tiktok',
+    });
+  }
+  return out;
+}
+
+async function searchYouTubeCatalog(query: string): Promise<SuggestedTrack[]> {
+  const key = `yt:${query.toLowerCase().trim()}`;
+  const cached = getValidCached(ytSearchCache, key);
+  if (cached) return cached;
+
+  const [songsRes, videosRes] = await Promise.allSettled([
+    ytdl.search(query, { type: SearchType.Song, limit: 25, signal: AbortSignal.timeout(5000) }),
+    ytdl.search(query, { type: SearchType.Video, limit: 20, signal: AbortSignal.timeout(5000) }),
+  ]);
+
+  const songs = songsRes.status === 'fulfilled' ? songsRes.value : [];
+  const videos = videosRes.status === 'fulfilled' ? videosRes.value : [];
+
+  const merged = dedupeSuggestions([
+    ...mapYtSummaries(songs),
+    ...mapYtSummaries(videos),
+  ]);
+
+  if (merged.length > 0) {
+    setBoundedCache(ytSearchCache, key, merged, 50);
+  }
+  return merged;
+}
+
+async function searchTikTokCatalog(input: {
+  query: string;
+  limit: number;
+  ttCursor: number;
+  ttChallengeId?: string;
+}): Promise<{
+  items: SuggestedTrack[];
+  hasMore: boolean;
+  nextTtCursor: number;
+  ttChallengeId?: string;
+}> {
+  const { query, limit, ttCursor } = input;
+  let challengeId = input.ttChallengeId || '';
+
+  // 1. Tìm hashtag phù hợp nhất trên TikWM khi ở trang đầu
+  if (!challengeId && ttCursor === 0) {
+    const slugs = buildHashtagCandidates(query);
+    for (const slug of slugs.slice(0, 3)) {
+      try {
+        const res = await fetch(
+          `https://www.tikwm.com/api/challenge/search?keywords=${encodeURIComponent(
+            slug
+          )}&count=5&cursor=0`,
+          { headers: { Accept: 'application/json', 'User-Agent': IPHONE_UA }, signal: AbortSignal.timeout(4000) }
+        );
+        if (!res.ok) continue;
+        const json = await res.json();
+        const list = (json?.data?.challenge_list || []) as Array<{ id?: string; view_count?: number }>;
+        if (list[0]?.id) {
+          challengeId = list[0].id;
+          break;
+        }
+      } catch {}
+    }
+  }
+
+  // 2. Kéo danh sách video theo hashtag (hỗ trợ cursor phân trang vô hạn)
+  if (challengeId) {
+    try {
+      const postsRes = await fetch(
+        `https://www.tikwm.com/api/challenge/posts?challenge_id=${encodeURIComponent(
+          challengeId
+        )}&count=${limit}&cursor=${ttCursor}`,
+        { headers: { Accept: 'application/json', 'User-Agent': IPHONE_UA }, signal: AbortSignal.timeout(5000) }
+      );
+      if (postsRes.ok) {
+        const postsJson = await postsRes.json();
+        const videos = (postsJson?.data?.videos || []) as TikWmVideoRaw[];
+        const mapped = mapTikWmVideos(videos);
+        if (mapped.length > 0) {
+          return {
+            items: mapped,
+            hasMore: Boolean(postsJson?.data?.hasMore),
+            nextTtCursor: Number(postsJson?.data?.cursor ?? ttCursor + mapped.length),
+            ttChallengeId: challengeId,
+          };
+        }
+      }
+    } catch {}
+  }
+
+  // 3. Fallback qua tìm User TikTok nếu user search tên nghệ sĩ/kênh ở trang đầu
+  if (ttCursor === 0) {
+    try {
+      const uRes = await fetch(
+        `https://www.tikwm.com/api/user/search?keywords=${encodeURIComponent(
+          query
+        )}&count=3&cursor=0`,
+        { headers: { Accept: 'application/json', 'User-Agent': IPHONE_UA }, signal: AbortSignal.timeout(4000) }
+      );
+      if (uRes.ok) {
+        const uJson = await uRes.json();
+        const uniqueId = uJson?.data?.user_list?.[0]?.user?.unique_id;
+        if (uniqueId) {
+          const pRes = await fetch(
+            `https://www.tikwm.com/api/user/posts?unique_id=${encodeURIComponent(
+              uniqueId
+            )}&count=${limit}&cursor=0`,
+            { headers: { Accept: 'application/json', 'User-Agent': IPHONE_UA }, signal: AbortSignal.timeout(4500) }
+          );
+          if (pRes.ok) {
+            const pJson = await pRes.json();
+            const mapped = mapTikWmVideos((pJson?.data?.videos || []) as TikWmVideoRaw[]);
+            if (mapped.length > 0) {
+              return {
+                items: mapped,
+                hasMore: false,
+                nextTtCursor: mapped.length,
+              };
+            }
+          }
+        }
+      }
+    } catch {}
+
+    // 4. Fallback qua Bing RSS site:tiktok.com + hydrate qua TikWM
+    try {
+      const bingRes = await fetch(
+        `https://www.bing.com/search?q=${encodeURIComponent(
+          `site:tiktok.com/video ${query}`
+        )}&count=8&format=rss`,
+        { headers: { 'User-Agent': DESKTOP_UA }, signal: AbortSignal.timeout(4500) }
+      );
+      if (bingRes.ok) {
+        const xml = await bingRes.text();
+        const urls = Array.from(
+          xml.matchAll(/<link>(https:\/\/www\.tiktok\.com\/[^<]+)<\/link>/gi)
+        )
+          .map((m) => m[1])
+          .filter((u) => /tiktok\.com\/(?:@[^/]+\/video\/\d+|video\/\d+)/i.test(u))
+          .slice(0, 5);
+
+        const hydrated = await Promise.allSettled(
+          urls.map(async (u) => {
+            const r = await fetch(
+              `https://www.tikwm.com/api/?url=${encodeURIComponent(u)}`,
+              { headers: { Accept: 'application/json', 'User-Agent': IPHONE_UA }, signal: AbortSignal.timeout(4000) }
+            );
+            if (!r.ok) return null;
+            const j = await r.json();
+            if (j?.code !== 0 || !j?.data) return null;
+            return { ...j.data, video_id: j.data.id } as TikWmVideoRaw;
+          })
+        );
+
+        const rawList = hydrated
+          .filter((r): r is PromiseFulfilledResult<TikWmVideoRaw | null> => r.status === 'fulfilled')
+          .map((r) => r.value)
+          .filter((x): x is TikWmVideoRaw => Boolean(x));
+
+        const mapped = mapTikWmVideos(rawList);
+        if (mapped.length > 0) {
+          return {
+            items: mapped,
+            hasMore: false,
+            nextTtCursor: mapped.length,
+          };
+        }
+      }
+    } catch {}
+  }
+
+  return {
+    items: [],
+    hasMore: false,
+    nextTtCursor: ttCursor,
+    ttChallengeId: challengeId || undefined,
+  };
+}
+
+/**
+ * Tìm kiếm bài hát trên YouTube & TikTok có hỗ trợ phân trang khi kéo xuống
+ */
+export async function searchTracks(input: {
+  query: string;
+  platform?: 'all' | 'youtube' | 'tiktok';
+  offset?: number;
+  limit?: number;
+  ttCursor?: number;
+  ttChallengeId?: string;
+}): Promise<{
+  results: SuggestedTrack[];
+  hasMore: boolean;
+  nextOffset: number;
+  nextTtCursor: number;
+  ttChallengeId?: string;
+}> {
+  const query = input.query.trim();
+  const platform = input.platform || 'all';
+  const offset = Math.max(0, Number(input.offset) || 0);
+  const limit = Math.min(16, Math.max(6, Number(input.limit) || 10));
+  const ttCursor = Math.max(0, Number(input.ttCursor) || 0);
+
+  if (!query) {
+    return {
+      results: [],
+      hasMore: false,
+      nextOffset: 0,
+      nextTtCursor: 0,
+    };
+  }
+
+  const ytLimit = platform === 'all' ? Math.ceil(limit * 0.6) : platform === 'youtube' ? limit : 0;
+  const ttLimit = platform === 'all' ? Math.ceil(limit * 0.5) : platform === 'tiktok' ? limit : 0;
+
+  const [ytPool, ttRes] = await Promise.all([
+    ytLimit > 0 ? searchYouTubeCatalog(query) : Promise.resolve([]),
+    ttLimit > 0
+      ? searchTikTokCatalog({
+          query,
+          limit: ttLimit,
+          ttCursor,
+          ttChallengeId: input.ttChallengeId,
+        })
+      : Promise.resolve({
+          items: [] as SuggestedTrack[],
+          hasMore: false,
+          nextTtCursor: ttCursor,
+          ttChallengeId: input.ttChallengeId,
+        }),
+  ]);
+
+  const ytSlice = ytLimit > 0 ? ytPool.slice(offset, offset + ytLimit) : [];
+  const nextOffset = offset + ytSlice.length;
+  const ytHasMore = ytLimit > 0 && nextOffset < ytPool.length;
+
+  // Xen kẽ YouTube & TikTok mượt mà khi chọn Tất cả
+  const merged: SuggestedTrack[] = [];
+  const maxLen = Math.max(ytSlice.length, ttRes.items.length);
+  for (let i = 0; i < maxLen; i++) {
+    if (ytSlice[i]) merged.push(ytSlice[i]);
+    if (ttRes.items[i]) merged.push(ttRes.items[i]);
+  }
+
+  return {
+    results: dedupeSuggestions(merged),
+    hasMore: ytHasMore || ttRes.hasMore,
+    nextOffset,
+    nextTtCursor: ttRes.nextTtCursor,
+    ttChallengeId: ttRes.ttChallengeId,
+  };
 }

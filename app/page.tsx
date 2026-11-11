@@ -28,6 +28,7 @@ import {
   Settings,
   Repeat2,
   Compass,
+  Search,
 } from 'lucide-react';
 import Hls from 'hls.js';
 import { AppleSpinner } from './components/AppleSpinner';
@@ -142,12 +143,27 @@ export default function AudioPlayerPage() {
   const currentTrack =
     currentIndex >= 0 && currentIndex < queue.length ? queue[currentIndex] : null;
 
-  // Lịch sử, Gợi ý & Playlists
+  // Lịch sử, Gợi ý, Tìm kiếm YT/TikTok & Playlists
   const [history, setHistory] = useState<TrackData[]>([]);
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [suggestionsEnabled, setSuggestionsEnabled] = useState<boolean>(true);
   const [suggestions, setSuggestions] = useState<SuggestedTrack[]>([]);
+  const [suggestOffset, setSuggestOffset] = useState(0);
+  const [suggestHasMore, setSuggestHasMore] = useState(false);
   const [loadingSuggestions, setLoadingSuggestions] = useState<boolean>(false);
+  const [loadingMoreSuggest, setLoadingMoreSuggest] = useState<boolean>(false);
+
+  // Tìm kiếm YouTube & TikTok ngay trong tab Gợi ý (có kéo xuống tải thêm)
+  const [searchQuery, setSearchQuery] = useState('');
+  const [submittedSearch, setSubmittedSearch] = useState('');
+  const [searchPlatform, setSearchPlatform] = useState<'all' | 'youtube' | 'tiktok'>('all');
+  const [searchResults, setSearchResults] = useState<SuggestedTrack[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [searchOffset, setSearchOffset] = useState(0);
+  const [searchTtCursor, setSearchTtCursor] = useState(0);
+  const [searchTtChallengeId, setSearchTtChallengeId] = useState<string | undefined>(undefined);
+  const [searchHasMore, setSearchHasMore] = useState(false);
+
   const [activeTab, setActiveTab] = useState<'queue' | 'suggestions' | 'playlists' | 'history'>('queue');
   const [tabDirection, setTabDirection] = useState<1 | -1>(1);
 
@@ -203,6 +219,11 @@ export default function AudioPlayerPage() {
   const suggestionsRef = useRef<SuggestedTrack[]>(suggestions);
   const audioUnlockedRef = useRef<boolean>(false);
   const prefetchedSuggestCacheRef = useRef<Map<string, TrackData>>(new Map());
+  const playRequestIdRef = useRef<number>(0);
+  const isSwitchingTrackRef = useRef<boolean>(false);
+  const suggestScrollRef = useRef<HTMLDivElement | null>(null);
+  const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null);
+  const loadMoreFnRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     queueRef.current = queue;
@@ -443,18 +464,26 @@ export default function AudioPlayerPage() {
   // Tự động lấy danh sách Gợi ý (Related Tracks) khi đổi bài đang phát
   useEffect(() => {
     if (!suggestionsEnabled || !currentTrack) {
-      if (!suggestionsEnabled) setSuggestions([]);
+      if (!suggestionsEnabled) {
+        setSuggestions([]);
+        setSuggestOffset(0);
+        setSuggestHasMore(false);
+      }
       return;
     }
 
     const controller = new AbortController();
     let prefetchTimer: number | null = null;
     setLoadingSuggestions(true);
+    setSuggestOffset(0);
+    setSuggestHasMore(false);
 
     fetch('/api/related', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        offset: 0,
+        limit: 10,
         track: {
           id: currentTrack.id,
           originalUrl: currentTrack.originalUrl,
@@ -470,6 +499,8 @@ export default function AudioPlayerPage() {
         if (Array.isArray(json?.suggestions)) {
           const list = json.suggestions as SuggestedTrack[];
           setSuggestions(list);
+          setSuggestHasMore(Boolean(json?.hasMore));
+          setSuggestOffset(Number(json?.nextOffset ?? list.length));
 
           // Prefetch ngầm bài gợi ý top 1 sau 1.2s để bấm nghe là phát tức thì
           const topItem = list[0];
@@ -479,7 +510,14 @@ export default function AudioPlayerPage() {
               fetch('/api/extract', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ url: topItem.url }),
+                body: JSON.stringify({
+                  url: topItem.url,
+                  fallbackMeta: {
+                    title: topItem.title,
+                    author: topItem.author,
+                    thumbnail: topItem.thumbnail,
+                  },
+                }),
                 signal: controller.signal,
               })
                 .then((r) => (r.ok ? r.json() : null))
@@ -491,7 +529,7 @@ export default function AudioPlayerPage() {
                       title: topItem.title || data.title,
                       author: topItem.author || data.author,
                       thumbnail: topItem.thumbnail || data.thumbnail,
-                      source: topItem.source || data.source,
+                      source: data.source || topItem.source,
                     });
                   }
                 })
@@ -514,6 +552,159 @@ export default function AudioPlayerPage() {
       }
     };
   }, [currentTrack?.id, currentTrack?.originalUrl, suggestionsEnabled]);
+
+  const executeTrackSearch = useCallback(
+    async (
+      rawQ: string,
+      platform: 'all' | 'youtube' | 'tiktok',
+      append = false,
+      opts?: { offset: number; ttCursor: number; ttChallengeId?: string }
+    ) => {
+      const q = rawQ.trim();
+      if (!q) {
+        setSubmittedSearch('');
+        setSearchResults([]);
+        setSearchHasMore(false);
+        return;
+      }
+
+      if (append) {
+        setLoadingMoreSuggest(true);
+      } else {
+        setSubmittedSearch(q);
+        setIsSearching(true);
+        setSearchResults([]);
+        setSearchOffset(0);
+        setSearchTtCursor(0);
+        setSearchTtChallengeId(undefined);
+        setSearchHasMore(false);
+      }
+
+      try {
+        const res = await fetch('/api/search', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            query: q,
+            platform,
+            offset: append ? opts?.offset || 0 : 0,
+            limit: 10,
+            ttCursor: append ? opts?.ttCursor || 0 : 0,
+            ttChallengeId: append ? opts?.ttChallengeId : undefined,
+          }),
+        });
+        const data = await res.json();
+        const items = Array.isArray(data?.results) ? (data.results as SuggestedTrack[]) : [];
+        if (append) {
+          setSearchResults((prev) => {
+            const seen = new Set(prev.map((x) => `${x.source}:${x.id}`));
+            const fresh = items.filter((x) => !seen.has(`${x.source}:${x.id}`));
+            return [...prev, ...fresh];
+          });
+        } else {
+          setSearchResults(items);
+        }
+        setSearchHasMore(Boolean(data?.hasMore));
+        setSearchOffset(Number(data?.nextOffset ?? 0));
+        setSearchTtCursor(Number(data?.nextTtCursor ?? 0));
+        if (data?.ttChallengeId) {
+          setSearchTtChallengeId(String(data.ttChallengeId));
+        }
+      } catch {
+        if (!append) showToast('Không thể tìm kiếm lúc này, thử lại sau!');
+      } finally {
+        setIsSearching(false);
+        setLoadingMoreSuggest(false);
+      }
+    },
+    []
+  );
+
+  const loadMoreRelatedOrSearch = useCallback(async () => {
+    if (loadingMoreSuggest || isSearching || loadingSuggestions) return;
+
+    if (submittedSearch) {
+      if (!searchHasMore) return;
+      await executeTrackSearch(submittedSearch, searchPlatform, true, {
+        offset: searchOffset,
+        ttCursor: searchTtCursor,
+        ttChallengeId: searchTtChallengeId,
+      });
+      return;
+    }
+
+    if (!currentTrack || !suggestHasMore) return;
+    setLoadingMoreSuggest(true);
+    try {
+      const res = await fetch('/api/related', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          offset: suggestOffset,
+          limit: 10,
+          track: {
+            id: currentTrack.id,
+            originalUrl: currentTrack.originalUrl,
+            title: currentTrack.title,
+            author: currentTrack.author,
+            source: currentTrack.source,
+          },
+        }),
+      });
+      const json = await res.json();
+      const extra = Array.isArray(json?.suggestions)
+        ? (json.suggestions as SuggestedTrack[])
+        : [];
+      if (extra.length > 0) {
+        setSuggestions((prev) => {
+          const seen = new Set(prev.map((x) => `${x.source}:${x.id}`));
+          const fresh = extra.filter((x) => !seen.has(`${x.source}:${x.id}`));
+          return [...prev, ...fresh];
+        });
+      }
+      setSuggestHasMore(Boolean(json?.hasMore));
+      setSuggestOffset(Number(json?.nextOffset ?? suggestOffset + extra.length));
+    } catch {
+    } finally {
+      setLoadingMoreSuggest(false);
+    }
+  }, [
+    currentTrack,
+    executeTrackSearch,
+    isSearching,
+    loadingMoreSuggest,
+    loadingSuggestions,
+    searchHasMore,
+    searchOffset,
+    searchPlatform,
+    searchTtChallengeId,
+    searchTtCursor,
+    submittedSearch,
+    suggestHasMore,
+    suggestOffset,
+  ]);
+
+  useEffect(() => {
+    loadMoreFnRef.current = loadMoreRelatedOrSearch;
+  }, [loadMoreRelatedOrSearch]);
+
+  useEffect(() => {
+    if (!suggestionsEnabled || activeTab !== 'suggestions') return;
+    const rootEl = suggestScrollRef.current;
+    const sentinel = loadMoreSentinelRef.current;
+    if (!rootEl || !sentinel || typeof IntersectionObserver === 'undefined') return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          loadMoreFnRef.current();
+        }
+      },
+      { root: rootEl, rootMargin: '90px' }
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [suggestionsEnabled, activeTab, submittedSearch, suggestions.length, searchResults.length]);
 
   const handleChangeLockScreenMode = (mode: 'track' | 'seek') => {
     setLockScreenControlMode(mode);
@@ -581,22 +772,31 @@ export default function AudioPlayerPage() {
     | TrackData
     | { isBatch: true; playlistName: string; tracks: TrackData[] };
 
-  const fetchExtractRaw = useCallback(async (url: string): Promise<ExtractApiResult> => {
-    const response = await fetch('/api/extract', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: url.trim() }),
-    });
-    const data = await response.json();
-    if (!response.ok || data.error) {
-      throw new Error(data.error || 'Không thể lấy được link âm thanh.');
-    }
-    return data as ExtractApiResult;
-  }, []);
+  const fetchExtractRaw = useCallback(
+    async (
+      url: string,
+      fallbackMeta?: { title?: string; author?: string; thumbnail?: string }
+    ): Promise<ExtractApiResult> => {
+      const response = await fetch('/api/extract', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: url.trim(), fallbackMeta }),
+      });
+      const data = await response.json();
+      if (!response.ok || data.error) {
+        throw new Error(data.error || 'Không thể lấy được link âm thanh.');
+      }
+      return data as ExtractApiResult;
+    },
+    []
+  );
 
   const fetchFreshTrack = useCallback(
-    async (url: string): Promise<TrackData> => {
-      const result = await fetchExtractRaw(url);
+    async (
+      url: string,
+      fallbackMeta?: { title?: string; author?: string; thumbnail?: string }
+    ): Promise<TrackData> => {
+      const result = await fetchExtractRaw(url, fallbackMeta);
       if ('isBatch' in result && result.isBatch) {
         return result.tracks[0];
       }
@@ -615,7 +815,11 @@ export default function AudioPlayerPage() {
 
       if (!isExpired) return track;
 
-      const refreshed = await fetchFreshTrack(track.originalUrl);
+      const refreshed = await fetchFreshTrack(track.originalUrl, {
+        title: track.title,
+        author: track.author,
+        thumbnail: track.thumbnail,
+      });
       const merged: TrackData = {
         ...refreshed,
         id: track.id,
@@ -625,7 +829,7 @@ export default function AudioPlayerPage() {
           track.thumbnail && !track.thumbnail.includes('placehold.co')
             ? track.thumbnail
             : refreshed.thumbnail,
-        source: track.source || refreshed.source,
+        source: refreshed.source || track.source,
       };
       setQueue((prev) =>
         prev.map((item) => (item.id === track.id ? merged : item))
@@ -733,6 +937,8 @@ export default function AudioPlayerPage() {
       const audio = audioRef.current;
       if (!audio) return;
 
+      const reqId = ++playRequestIdRef.current;
+      isSwitchingTrackRef.current = true;
       clearStallWatchdog();
       setError(null);
       setCurrentIndex(index);
@@ -740,17 +946,31 @@ export default function AudioPlayerPage() {
       trackRepeatOnceCountRef.current = 0;
       recoveryAttemptsRef.current = 0;
       lastPlayTimeRef.current = 0;
+      setCurrentTime(0);
+      setDuration(0);
+
+      // Tạm dừng luồng bài cũ ngay trước khi nạp bài mới để tránh lỗi từ bài cũ bắn nhầm vào bài mới
+      try {
+        audio.pause();
+      } catch {}
+      if (hlsRef.current) {
+        hlsRef.current.destroy();
+        hlsRef.current = null;
+      }
 
       let targetTrack = targetQueue[index];
 
       try {
         targetTrack = await ensureValidAudioUrl(targetTrack);
+        if (playRequestIdRef.current !== reqId) return;
 
         if (!sleepEndTimeRef.current) {
           audio.volume = userBaseVolumeRef.current;
         }
 
+        isSwitchingTrackRef.current = false;
         await attachAndPlayAudio(audio, targetTrack);
+        if (playRequestIdRef.current !== reqId) return;
 
         setIsPlaying(true);
         addToHistory(targetTrack);
@@ -759,25 +979,41 @@ export default function AudioPlayerPage() {
           navigator.mediaSession.playbackState = 'playing';
         }
       } catch {
+        if (playRequestIdRef.current !== reqId) return;
         try {
-          const refreshed = await fetchFreshTrack(targetTrack.originalUrl);
+          const refreshed = await fetchFreshTrack(targetTrack.originalUrl, {
+            title: targetTrack.title,
+            author: targetTrack.author,
+            thumbnail: targetTrack.thumbnail,
+          });
+          if (playRequestIdRef.current !== reqId) return;
+
           const merged: TrackData = {
             ...refreshed,
             id: targetTrack.id,
             title: targetTrack.title || refreshed.title,
             author: targetTrack.author || refreshed.author,
             thumbnail: targetTrack.thumbnail || refreshed.thumbnail,
-            source: targetTrack.source || refreshed.source,
+            source: refreshed.source || targetTrack.source,
           };
           setQueue((prev) => prev.map((t, idx) => (idx === index ? merged : t)));
+          isSwitchingTrackRef.current = false;
           await attachAndPlayAudio(audio, merged);
+          if (playRequestIdRef.current !== reqId) return;
+
           setIsPlaying(true);
           addToHistory(merged);
         } catch (retryErr) {
+          if (playRequestIdRef.current !== reqId) return;
+          isSwitchingTrackRef.current = false;
           const msg =
             retryErr instanceof Error ? retryErr.message : 'Không thể phát bài hát này.';
           setError(msg);
           setIsPlaying(false);
+        }
+      } finally {
+        if (playRequestIdRef.current === reqId) {
+          isSwitchingTrackRef.current = false;
         }
       }
     },
@@ -794,6 +1030,7 @@ export default function AudioPlayerPage() {
     if (
       !audio ||
       !track ||
+      isSwitchingTrackRef.current ||
       isRecoveringRef.current ||
       recoveryAttemptsRef.current >= 2 ||
       audio.src === SILENT_AUDIO_URI
@@ -809,14 +1046,18 @@ export default function AudioPlayerPage() {
 
     try {
       showToast('Đang tự làm mới kết nối âm thanh...');
-      const refreshed = await fetchFreshTrack(track.originalUrl);
+      const refreshed = await fetchFreshTrack(track.originalUrl, {
+        title: track.title,
+        author: track.author,
+        thumbnail: track.thumbnail,
+      });
       const merged: TrackData = {
         ...refreshed,
         id: track.id,
         title: track.title || refreshed.title,
         author: track.author || refreshed.author,
         thumbnail: track.thumbnail || refreshed.thumbnail,
-        source: track.source || refreshed.source,
+        source: refreshed.source || track.source,
       };
       setQueue((prev) => prev.map((t, i) => (i === idx ? merged : t)));
 
@@ -849,11 +1090,24 @@ export default function AudioPlayerPage() {
   const startStallWatchdog = useCallback(() => {
     clearStallWatchdog();
     const audio = audioRef.current;
-    if (!audio || audio.paused || !audio.src || audio.src === SILENT_AUDIO_URI) return;
+    if (
+      isSwitchingTrackRef.current ||
+      !audio ||
+      audio.paused ||
+      !audio.src ||
+      audio.src === SILENT_AUDIO_URI
+    ) {
+      return;
+    }
 
     stallTimerRef.current = setTimeout(() => {
       const currentAudio = audioRef.current;
-      if (currentAudio && !currentAudio.paused && currentAudio.readyState < 3) {
+      if (
+        !isSwitchingTrackRef.current &&
+        currentAudio &&
+        !currentAudio.paused &&
+        currentAudio.readyState < 3
+      ) {
         recoverCurrentTrack();
       }
     }, 6500);
@@ -1289,6 +1543,7 @@ export default function AudioPlayerPage() {
   };
 
   const playSuggestedTrack = async (item: SuggestedTrack, playNow: boolean) => {
+    void unlockAudioOnUserGesture();
     const cached = prefetchedSuggestCacheRef.current.get(item.url);
     const ttl = item.source === 'soundcloud' ? SOUNDCLOUD_TTL_MS : STREAM_TTL_MS;
     const isFresh =
@@ -1969,18 +2224,18 @@ export default function AudioPlayerPage() {
         </div>
       )}
 
-      <div className="relative z-10 w-full max-w-md space-y-4 my-1">
+      <div className="relative z-10 w-full max-w-[460px] space-y-4 my-1">
         {/* THANH TIÊU ĐỀ + NÚT BÁNH RĂNG CÀI ĐẶT GÓC PHẢI TRÊN CÙNG */}
         <header className="flex items-center justify-between px-1">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-full neon-orb-primary flex items-center justify-center">
+            <div className="w-9 h-9 rounded-full neon-orb-primary flex items-center justify-center">
               {isPlaying ? (
-                <AudioLines className="w-4 h-4 text-white animate-pulse" />
+                <AudioLines className="w-4.5 h-4.5 text-white animate-pulse" />
               ) : (
-                <Music2 className="w-4 h-4 text-white" />
+                <Music2 className="w-4.5 h-4.5 text-white" />
               )}
             </div>
-            <span className="text-lg font-bold tracking-tight text-white">
+            <span className="text-xl font-bold tracking-tight text-white">
               LiquidAudio
             </span>
           </div>
@@ -1988,7 +2243,7 @@ export default function AudioPlayerPage() {
           <button
             type="button"
             onClick={() => setShowSettingsModal(true)}
-            className="liquid-pill px-3.5 py-2 rounded-full flex items-center gap-2 text-xs font-semibold text-white/90 hover:text-white active:scale-95 transition"
+            className="liquid-pill px-4 py-2 rounded-full flex items-center gap-2 text-[13px] font-semibold text-white/95 hover:text-white active:scale-95 transition"
           >
             {syncSession && (
               <span
@@ -2035,13 +2290,13 @@ export default function AudioPlayerPage() {
                 }
               }}
               placeholder="Dán link TikTok, YouTube, SoundCloud, Spotify..."
-              className="w-full py-2 text-[15px] bg-transparent text-white placeholder-white/45 focus:outline-none"
+              className="w-full py-2.5 text-base bg-transparent text-white placeholder-white/50 focus:outline-none"
             />
             {inputUrl && (
               <button
                 type="button"
                 onClick={() => setInputUrl('')}
-                className="px-2.5 py-1.5 rounded-xl bg-white/10 text-cyan-300 text-xs font-medium hover:bg-white/15 shrink-0"
+                className="px-3 py-1.5 rounded-xl bg-white/10 text-cyan-300 text-[13px] font-medium hover:bg-white/15 shrink-0"
                 title="Xóa"
               >
                 Xóa
@@ -2058,7 +2313,7 @@ export default function AudioPlayerPage() {
               isSuccess={successMode === 'play'}
               successLabel="Đang phát"
               onClick={() => handleExtractUrl('play', inputUrl)}
-              className="py-3 px-4 rounded-2xl font-semibold text-sm flex items-center justify-center gap-2 disabled:opacity-60"
+              className="py-3.5 px-4 rounded-2xl font-semibold text-[15px] flex items-center justify-center gap-2 disabled:opacity-60"
             >
               <Play className="w-4 h-4 fill-current" />
               <span>Phát ngay</span>
@@ -2072,7 +2327,7 @@ export default function AudioPlayerPage() {
               isSuccess={successMode === 'queue'}
               successLabel="Đã thêm"
               onClick={() => handleExtractUrl('queue', inputUrl)}
-              className="py-3 px-4 rounded-2xl font-semibold text-sm text-cyan-200 flex items-center justify-center gap-2 disabled:opacity-60"
+              className="py-3.5 px-4 rounded-2xl font-semibold text-[15px] text-cyan-200 flex items-center justify-center gap-2 disabled:opacity-60"
             >
               <ListPlus className="w-4 h-4 text-cyan-300" />
               <span>+ Tiếp theo</span>
@@ -2080,7 +2335,7 @@ export default function AudioPlayerPage() {
           </div>
 
           {error && (
-            <div className="p-3 rounded-2xl bg-rose-500/20 border border-rose-300/30 text-rose-100 text-sm flex items-start gap-2 backdrop-blur-xl">
+            <div className="p-3.5 rounded-2xl bg-rose-500/20 border border-rose-300/30 text-rose-100 text-[15px] leading-snug flex items-start gap-2.5 backdrop-blur-xl">
               <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-rose-300" />
               <span>{error}</span>
             </div>
@@ -2092,15 +2347,15 @@ export default function AudioPlayerPage() {
           <CursorGlowCard ref={nowPlayingCardRef} className="p-5 space-y-4">
             {/* Header Now Playing */}
             <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0 flex-1 space-y-0.5">
+              <div className="min-w-0 flex-1 space-y-1">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-cyan-300/90">
+                  <span className="text-xs font-bold uppercase tracking-[0.12em] text-cyan-300/95">
                     NOW PLAYING
                   </span>
-                  <span className="px-2 py-0.5 rounded-full bg-white/10 text-[11px] font-medium text-white/80 tabular-nums">
+                  <span className="px-2.5 py-0.5 rounded-full bg-white/12 text-xs font-semibold text-white/85 tabular-nums">
                     {currentIndex + 1}/{queue.length}
                   </span>
-                  <span className="px-2 py-0.5 rounded-full bg-cyan-400/15 border border-cyan-300/25 text-[10px] font-bold uppercase text-cyan-200">
+                  <span className="px-2.5 py-0.5 rounded-full bg-cyan-400/15 border border-cyan-300/30 text-[11px] font-bold uppercase text-cyan-200">
                     {currentTrack.source === 'tiktok'
                       ? 'TikTok'
                       : currentTrack.source === 'soundcloud'
@@ -2111,10 +2366,10 @@ export default function AudioPlayerPage() {
                   </span>
                 </div>
 
-                <h2 className="text-lg font-bold tracking-tight text-white truncate pt-0.5">
+                <h2 className="text-[21px] leading-snug font-bold tracking-tight text-white truncate pt-0.5">
                   {currentTrack.title}
                 </h2>
-                <p className="text-sm text-white/65 truncate">{currentTrack.author}</p>
+                <p className="text-[15.5px] text-white/70 truncate">{currentTrack.author}</p>
               </div>
 
               <div className="flex items-center gap-1.5 shrink-0">
@@ -2175,7 +2430,7 @@ export default function AudioPlayerPage() {
                 title="Tua lùi 5 giây"
               >
                 <RotateCcw className="w-4 h-4" />
-                <span className="text-xs font-semibold tabular-nums">-5s</span>
+                <span className="text-[13px] font-semibold tabular-nums">-5s</span>
               </button>
 
               <button
@@ -2205,10 +2460,10 @@ export default function AudioPlayerPage() {
               <button
                 type="button"
                 onClick={() => seekRelative(5)}
-                className="liquid-btn px-3 h-10 rounded-full flex items-center gap-1 text-white/85 hover:text-pink-300"
+                className="liquid-btn px-3.5 h-10 rounded-full flex items-center gap-1 text-white/90 hover:text-pink-300"
                 title="Tua tiến 5 giây"
               >
-                <span className="text-xs font-semibold tabular-nums">+5s</span>
+                <span className="text-[13px] font-semibold tabular-nums">+5s</span>
                 <RotateCw className="w-4 h-4" />
               </button>
             </div>
@@ -2221,7 +2476,7 @@ export default function AudioPlayerPage() {
                 formatTime={formatTime}
                 onSeek={seekToTime}
               />
-              <div className="flex justify-between text-xs font-medium text-white/65 tabular-nums">
+              <div className="flex justify-between text-[13px] font-medium text-white/75 tabular-nums">
                 <span>{formatTime(currentTime)}</span>
                 <span>{formatTime(duration)}</span>
               </div>
@@ -2234,16 +2489,16 @@ export default function AudioPlayerPage() {
                 <button
                   type="button"
                   onClick={cycleTrackRepeatMode}
-                  className={`py-2 px-3 rounded-2xl text-xs font-semibold flex items-center justify-center gap-1.5 border transition active:scale-95 ${
+                  className={`py-2.5 px-2 rounded-2xl text-[12.5px] sm:text-[13px] whitespace-nowrap font-semibold flex items-center justify-center gap-1 border transition active:scale-95 ${
                     trackRepeatMode !== 'off'
                       ? 'bg-cyan-400/20 border-cyan-300/50 text-cyan-200'
-                      : 'bg-white/5 border-white/10 text-white/75 hover:text-white'
+                      : 'bg-white/5 border-white/10 text-white/80 hover:text-white'
                   }`}
                 >
                   {trackRepeatMode === 'once' ? (
-                    <Repeat1 className="w-4 h-4" />
+                    <Repeat1 className="w-4 h-4 shrink-0" />
                   ) : (
-                    <Repeat className="w-4 h-4" />
+                    <Repeat className="w-4 h-4 shrink-0" />
                   )}
                   <span>
                     {trackRepeatMode === 'off'
@@ -2257,13 +2512,13 @@ export default function AudioPlayerPage() {
                 <button
                   type="button"
                   onClick={cyclePlaylistRepeatMode}
-                  className={`py-2 px-3 rounded-2xl text-xs font-semibold flex items-center justify-center gap-1.5 border transition active:scale-95 ${
+                  className={`py-2.5 px-2 rounded-2xl text-[12.5px] sm:text-[13px] whitespace-nowrap font-semibold flex items-center justify-center gap-1 border transition active:scale-95 ${
                     playlistRepeatMode !== 'off'
                       ? 'bg-pink-500/20 border-pink-400/50 text-pink-200'
-                      : 'bg-white/5 border-white/10 text-white/75 hover:text-white'
+                      : 'bg-white/5 border-white/10 text-white/80 hover:text-white'
                   }`}
                 >
-                  <Repeat2 className="w-4 h-4" />
+                  <Repeat2 className="w-4 h-4 shrink-0" />
                   <span>
                     {playlistRepeatMode === 'off'
                       ? 'Lặp Playlist: Tắt'
@@ -2276,7 +2531,7 @@ export default function AudioPlayerPage() {
 
               {/* Hàng Hẹn giờ 15 / 30 / 45 phút + Đồng hồ 1-60p */}
               <div className="flex items-center justify-between gap-2 flex-wrap">
-                <div className="flex items-center gap-1.5 text-xs text-white/80">
+                <div className="flex items-center gap-1.5 text-[13px] text-white/85">
                   <Timer className="w-4 h-4 text-cyan-300" />
                   <span className="font-medium">Hẹn giờ:</span>
                   {sleepRemainingSec !== null && (
@@ -2295,10 +2550,10 @@ export default function AudioPlayerPage() {
                       onClick={() =>
                         startSleepTimer(sleepTimerMinutes === mins ? null : mins)
                       }
-                      className={`px-3 py-1.5 rounded-full text-xs font-semibold transition active:scale-95 ${
+                      className={`px-3 py-1.5 rounded-full text-[13px] font-semibold transition active:scale-95 ${
                         sleepTimerMinutes === mins
                           ? 'neon-orb-primary text-white shadow'
-                          : 'bg-white/8 hover:bg-white/15 border border-white/12 text-white/80'
+                          : 'bg-white/8 hover:bg-white/15 border border-white/12 text-white/85'
                       }`}
                     >
                       {mins}p
@@ -2309,7 +2564,7 @@ export default function AudioPlayerPage() {
                     type="button"
                     onClick={() => setShowClockModal(true)}
                     title="Đồng hồ đếm ngược 1–60 phút"
-                    className={`px-3 py-1.5 rounded-full text-xs font-semibold flex items-center gap-1 transition active:scale-95 ${
+                    className={`px-3 py-1.5 rounded-full text-[13px] font-semibold flex items-center gap-1 transition active:scale-95 ${
                       isCustomSleepTime
                         ? 'neon-orb-primary text-white shadow'
                         : 'bg-white/10 hover:bg-white/20 border border-white/15 text-cyan-200'
@@ -2323,7 +2578,7 @@ export default function AudioPlayerPage() {
                     <button
                       type="button"
                       onClick={() => startSleepTimer(null)}
-                      className="px-3 py-1.5 rounded-full text-xs font-medium bg-rose-500/20 border border-rose-300/30 text-rose-200"
+                      className="px-3 py-1.5 rounded-full text-[13px] font-medium bg-rose-500/20 border border-rose-300/30 text-rose-200"
                     >
                       Tắt
                     </button>
@@ -2364,7 +2619,7 @@ export default function AudioPlayerPage() {
               },
               {
                 id: 'history',
-                label: 'Đã nghe',
+                label: 'Lịch sử',
                 icon: <History className="w-3.5 h-3.5 shrink-0" />,
               },
             ]}
@@ -2377,72 +2632,201 @@ export default function AudioPlayerPage() {
               tabDirection > 0 ? 'u039-panel-right' : 'u039-panel-left'
             }`}
           >
-            {/* TAB GỢI Ý BÀI HÁT LIÊN QUAN */}
+            {/* TAB GỢI Ý & TÌM KIẾM BÀI HÁT YOUTUBE / TIKTOK (CUỘN XUỐNG TẢI THÊM) */}
             {suggestionsEnabled && activeTab === 'suggestions' && (
-              <div className="space-y-2 max-h-72 overflow-y-auto no-scrollbar u039-stagger">
-              {!currentTrack ? (
-                <p className="text-center text-sm text-white/50 py-8">
-                  Hãy phát 1 bài hát để hiện các bài gợi ý cùng gu nhé!
-                </p>
-              ) : loadingSuggestions && suggestions.length === 0 ? (
-                <SuggestionSkeleton rows={4} />
-              ) : suggestions.length === 0 ? (
-                <p className="text-center text-sm text-white/50 py-8">
-                  Chưa tìm thấy bài gợi ý cho bài này. Thử phát 1 bài YouTube, SoundCloud hoặc Spotify!
-                </p>
-              ) : (
-                suggestions.map((item, idx) => (
-                  <div
-                    key={`${item.id}_${idx}`}
-                    style={{ '--d': `${idx * 42}ms` } as React.CSSProperties}
-                    className="u079-bloom flex items-center gap-3 p-2.5 rounded-2xl bg-white/5 border border-white/10 hover:bg-white/10 transition"
-                  >
-                    <span className="w-5 text-center text-xs font-semibold text-white/50 tabular-nums shrink-0">
-                      {idx + 1}
-                    </span>
+              <div className="space-y-3">
+                {/* Form tìm kiếm bài hát YouTube / TikTok */}
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    executeTrackSearch(searchQuery, searchPlatform, false);
+                  }}
+                  className="space-y-2"
+                >
+                  <div className="flex items-center gap-2 bg-black/40 border border-white/15 rounded-2xl px-3 py-1.5">
+                    <Search className="w-4 h-4 text-cyan-300 shrink-0" />
+                    <input
+                      type="text"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      placeholder="Tìm bài hát YouTube, TikTok..."
+                      className="flex-1 min-w-0 py-1.5 text-base bg-transparent text-white placeholder-white/50 focus:outline-none"
+                    />
+                    {searchQuery && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSearchQuery('');
+                          setSubmittedSearch('');
+                          setSearchResults([]);
+                          setSearchHasMore(false);
+                        }}
+                        className="p-1 text-white/55 hover:text-white shrink-0"
+                        title="Xóa tìm kiếm"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    )}
                     <button
-                      type="button"
-                      onClick={() => playSuggestedTrack(item, true)}
-                      className="flex items-center gap-3 flex-1 min-w-0 text-left"
+                      type="submit"
+                      className="neon-orb-primary px-3.5 py-1.5 rounded-xl text-[13px] font-semibold text-white shrink-0 active:scale-95 transition"
                     >
-                      <img
-                        src={`/api/image-proxy?url=${encodeURIComponent(item.thumbnail)}`}
-                        alt={item.title}
-                        className="w-11 h-11 rounded-xl object-cover bg-white/10 border border-white/15 shrink-0"
-                      />
-                      <div className="min-w-0 flex-1">
-                        <p className="text-sm font-semibold text-white truncate">
-                          {item.title}
-                        </p>
-                        <p className="text-xs text-white/60 truncate">
-                          {item.author} •{' '}
-                          <span className="uppercase text-[10px] text-cyan-300">
-                            {item.source}
-                          </span>
-                        </p>
-                      </div>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => playSuggestedTrack(item, false)}
-                      title="Thêm vào Tiếp theo"
-                      className="liquid-btn p-2 rounded-full text-cyan-300"
-                    >
-                      <ListPlus className="w-4 h-4" />
+                      Tìm
                     </button>
                   </div>
-                ))
-              )}
-            </div>
-          )}
+
+                  {/* Bộ lọc nguồn tìm kiếm */}
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <div className="flex items-center gap-1.5">
+                      {(
+                        [
+                          { id: 'all', label: 'Tất cả' },
+                          { id: 'youtube', label: 'YouTube' },
+                          { id: 'tiktok', label: 'TikTok' },
+                        ] as const
+                      ).map((opt) => (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          onClick={() => {
+                            setSearchPlatform(opt.id);
+                            if (searchQuery.trim()) {
+                              executeTrackSearch(searchQuery, opt.id, false);
+                            }
+                          }}
+                          className={`px-3 py-1 rounded-full text-[13px] font-semibold border transition active:scale-95 ${
+                            searchPlatform === opt.id
+                              ? 'bg-cyan-400/20 border-cyan-300/50 text-cyan-200'
+                              : 'bg-white/5 border-white/10 text-white/75 hover:text-white'
+                          }`}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+
+                    {submittedSearch && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSearchQuery('');
+                          setSubmittedSearch('');
+                          setSearchResults([]);
+                        }}
+                        className="text-[13px] text-cyan-300 hover:underline font-medium"
+                      >
+                        Về gợi ý bài đang phát
+                      </button>
+                    )}
+                  </div>
+                </form>
+
+                {/* Danh sách kết quả tìm kiếm hoặc bài gợi ý liên quan + Infinite Scroll */}
+                {(() => {
+                  const isSearchMode = Boolean(submittedSearch);
+                  const activeList = isSearchMode ? searchResults : suggestions;
+                  const activeLoading = isSearchMode ? isSearching : loadingSuggestions;
+                  const activeHasMore = isSearchMode ? searchHasMore : suggestHasMore;
+
+                  return (
+                    <div
+                      ref={suggestScrollRef}
+                      onScroll={(e) => {
+                        const el = e.currentTarget;
+                        if (
+                          el.scrollHeight - el.scrollTop - el.clientHeight < 90 &&
+                          activeHasMore &&
+                          !loadingMoreSuggest
+                        ) {
+                          loadMoreRelatedOrSearch();
+                        }
+                      }}
+                      className="space-y-2.5 max-h-[24rem] overflow-y-auto no-scrollbar u039-stagger"
+                    >
+                      {!isSearchMode && !currentTrack ? (
+                        <p className="text-center text-[15px] text-white/60 py-8 leading-relaxed">
+                          Nhập tên bài hát / ca sĩ để tìm từ YouTube &amp; TikTok, hoặc phát 1 bài để xem gợi ý tự động!
+                        </p>
+                      ) : activeLoading && activeList.length === 0 ? (
+                        <SuggestionSkeleton rows={4} />
+                      ) : activeList.length === 0 ? (
+                        <p className="text-center text-[15px] text-white/60 py-8">
+                          {isSearchMode
+                            ? `Không tìm thấy bài nào cho "${submittedSearch}". Thử từ khóa khác hoặc đổi sang YouTube/Tất cả!`
+                            : 'Chưa tìm thấy bài gợi ý cho bài này. Thử tìm kiếm trực tiếp ở ô trên!'}
+                        </p>
+                      ) : (
+                        <>
+                          {activeList.map((item, idx) => (
+                            <div
+                              key={`${item.id}_${idx}`}
+                              style={{ '--d': `${(idx % 10) * 35}ms` } as React.CSSProperties}
+                              className="u079-bloom flex items-center gap-3 p-2.5 rounded-2xl bg-white/5 border border-white/10 hover:bg-white/10 transition"
+                            >
+                              <span className="w-5 text-center text-[13px] font-semibold text-white/55 tabular-nums shrink-0">
+                                {idx + 1}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => playSuggestedTrack(item, true)}
+                                className="flex items-center gap-3 flex-1 min-w-0 text-left"
+                              >
+                                <img
+                                  src={`/api/image-proxy?url=${encodeURIComponent(item.thumbnail)}`}
+                                  alt={item.title}
+                                  className="w-12 h-12 rounded-xl object-cover bg-white/10 border border-white/15 shrink-0"
+                                />
+                                <div className="min-w-0 flex-1">
+                                  <p className="text-[15.5px] font-semibold text-white truncate">
+                                    {item.title}
+                                  </p>
+                                  <p className="text-[13px] text-white/70 truncate">
+                                    {item.author} •{' '}
+                                    <span className="uppercase text-[11px] font-bold text-cyan-300">
+                                      {item.source}
+                                    </span>
+                                  </p>
+                                </div>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => playSuggestedTrack(item, false)}
+                                title="Thêm vào Tiếp theo"
+                                className="liquid-btn p-2.5 rounded-full text-cyan-300 shrink-0"
+                              >
+                                <ListPlus className="w-4 h-4" />
+                              </button>
+                            </div>
+                          ))}
+
+                          <div ref={loadMoreSentinelRef} className="pt-1 pb-2">
+                            {loadingMoreSuggest ? (
+                              <SuggestionSkeleton rows={2} />
+                            ) : activeHasMore ? (
+                              <button
+                                type="button"
+                                onClick={() => loadMoreRelatedOrSearch()}
+                                className="w-full py-2.5 rounded-xl bg-white/5 border border-white/10 text-[13px] font-semibold text-cyan-300 hover:bg-white/10 transition"
+                              >
+                                Kéo xuống hoặc nhấn để tải thêm bài...
+                              </button>
+                            ) : null}
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  );
+                })()}
+              </div>
+            )}
 
           {/* TAB 1: HÀNG ĐỢI TIẾP THEO */}
           {activeTab === 'queue' && (
-            <div className="space-y-2 max-h-72 overflow-y-auto no-scrollbar u039-stagger">
+            <div className="space-y-2.5 max-h-[24rem] overflow-y-auto no-scrollbar u039-stagger">
               {queue.length === 0 ? (
-                <p className="text-center text-sm text-white/50 py-8">
-                  Danh sách phát trống. Hãy dán link ở trên hoặc chọn bài từ Đã nghe!
+                <p className="text-center text-[15px] text-white/60 py-8">
+                  Danh sách phát trống. Hãy dán link ở trên, tìm trong tab Gợi ý hoặc chọn từ Đã nghe!
                 </p>
               ) : (
                 queue.map((item, idx) => {
@@ -2460,7 +2844,7 @@ export default function AudioPlayerPage() {
                             : 'bg-[#0b101d]/95 border-white/10 hover:bg-white/10'
                         }`}
                       >
-                        <span className="w-5 text-center text-xs font-semibold text-white/50 tabular-nums shrink-0">
+                        <span className="w-5 text-center text-[13px] font-semibold text-white/55 tabular-nums shrink-0">
                           {idx + 1}
                         </span>
                         <button
@@ -2471,17 +2855,17 @@ export default function AudioPlayerPage() {
                           <img
                             src={`/api/image-proxy?url=${encodeURIComponent(item.thumbnail)}`}
                             alt={item.title}
-                            className="w-11 h-11 rounded-xl object-cover bg-white/10 border border-white/15 shrink-0"
+                            className="w-12 h-12 rounded-xl object-cover bg-white/10 border border-white/15 shrink-0"
                           />
                           <div className="min-w-0 flex-1">
                             <p
-                              className={`text-sm font-semibold truncate ${
+                              className={`text-[15.5px] font-semibold truncate ${
                                 isCurrent ? 'text-cyan-300' : 'text-white'
                               }`}
                             >
                               {item.title}
                             </p>
-                            <p className="text-xs text-white/60 truncate">{item.author}</p>
+                            <p className="text-[13px] text-white/70 truncate">{item.author}</p>
                           </div>
                         </button>
 
@@ -2514,116 +2898,116 @@ export default function AudioPlayerPage() {
           {activeTab === 'playlists' && (
             <div className="space-y-3">
               <form onSubmit={handleCreatePlaylist} className="flex gap-2">
-                <input
-                  type="text"
-                  value={newPlaylistName}
-                  onChange={(e) => setNewPlaylistName(e.target.value)}
-                  placeholder="Tên playlist mới (VD: Chill Đêm)..."
-                  className="flex-1 px-4 py-2.5 text-sm bg-black/35 border border-white/12 rounded-2xl text-white placeholder-white/45 focus:outline-none focus:border-cyan-400/50"
-                />
-                <button
-                  type="submit"
-                  className="neon-orb-primary px-4 py-2.5 rounded-2xl text-white text-sm font-semibold flex items-center gap-1 shrink-0 active:scale-95 transition"
-                >
-                  <Plus className="w-4 h-4" />
-                  <span>Tạo</span>
-                </button>
-              </form>
-
-              <div className="flex gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
-                {playlists.map((pl) => (
+                  <input
+                    type="text"
+                    value={newPlaylistName}
+                    onChange={(e) => setNewPlaylistName(e.target.value)}
+                    placeholder="Tên playlist mới (VD: Chill Đêm)..."
+                    className="flex-1 px-4 py-2.5 text-base bg-black/35 border border-white/12 rounded-2xl text-white placeholder-white/50 focus:outline-none focus:border-cyan-400/50"
+                  />
                   <button
-                    key={pl.id}
-                    type="button"
-                    onClick={() => setSelectedPlaylistId(pl.id)}
-                    className={`px-3.5 py-2 rounded-full text-xs font-medium shrink-0 border transition ${
-                      selectedPlaylist?.id === pl.id
-                        ? 'bg-cyan-400/20 border-cyan-300/50 text-cyan-200'
-                        : 'bg-white/5 border-white/10 text-white/75 hover:text-white'
-                    }`}
+                    type="submit"
+                    className="neon-orb-primary px-4 py-2.5 rounded-2xl text-white text-[15px] font-semibold flex items-center gap-1 shrink-0 active:scale-95 transition"
                   >
-                    {pl.name} ({pl.tracks.length})
+                    <Plus className="w-4 h-4" />
+                    <span>Tạo</span>
                   </button>
-                ))}
-              </div>
+                </form>
 
-              {deletedPlaylistBackup && (
-                <HoldToDeleteUndoBar
-                  message={`Đã xóa playlist "${deletedPlaylistBackup.playlist.name}"`}
-                  onUndo={handleUndoPlaylistDelete}
-                />
-              )}
+                <div className="flex gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
+                  {playlists.map((pl) => (
+                    <button
+                      key={pl.id}
+                      type="button"
+                      onClick={() => setSelectedPlaylistId(pl.id)}
+                      className={`px-3.5 py-2 rounded-full text-[13px] font-medium shrink-0 border transition ${
+                        selectedPlaylist?.id === pl.id
+                          ? 'bg-cyan-400/20 border-cyan-300/50 text-cyan-200'
+                          : 'bg-white/5 border-white/10 text-white/80 hover:text-white'
+                      }`}
+                    >
+                      {pl.name} ({pl.tracks.length})
+                    </button>
+                  ))}
+                </div>
 
-              {selectedPlaylist && (
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between gap-2 p-3.5 rounded-2xl bg-white/5 border border-white/10">
-                    <div className="min-w-0">
-                      <h3 className="text-sm font-semibold text-white truncate">
-                        {selectedPlaylist.name}
-                      </h3>
-                      <p className="text-xs text-white/60">
-                        {selectedPlaylist.tracks.length} bài • Phát tự động liên tục
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      <button
-                        type="button"
-                        onClick={() => playEntirePlaylist(selectedPlaylist, 0)}
-                        className="neon-orb-primary px-3 py-2 rounded-full text-white text-xs font-semibold flex items-center gap-1 active:scale-95 transition"
-                      >
-                        <PlayCircle className="w-3.5 h-3.5" />
-                        <span>Phát tất cả</span>
-                      </button>
-                      {playlists.length > 1 && (
-                        <HoldToDeleteButton
-                          label="Giữ xóa"
-                          holdingLabel="Đang giữ..."
-                          ariaLabel={`Nhấn giữ để xóa playlist ${selectedPlaylist.name}`}
-                          onConfirm={() => handleDeletePlaylist(selectedPlaylist.id)}
-                        />
-                      )}
-                    </div>
-                  </div>
+                {deletedPlaylistBackup && (
+                  <HoldToDeleteUndoBar
+                    message={`Đã xóa playlist "${deletedPlaylistBackup.playlist.name}"`}
+                    onUndo={handleUndoPlaylistDelete}
+                  />
+                )}
 
-                  <div className="space-y-1.5 max-h-56 overflow-y-auto no-scrollbar u039-stagger">
-                    {selectedPlaylist.tracks.length === 0 ? (
-                      <p className="text-center text-sm text-white/50 py-6">
-                        Playlist trống. Bấm biểu tượng thư mục (+) trên bài hát để thêm vào đây!
-                      </p>
-                    ) : (
-                      selectedPlaylist.tracks.map((item, idx) => (
-                        <SwipeToDeleteRow
-                          key={`${item.id}_${idx}`}
-                          ariaLabel={`${item.title}. Vuốt trái hoặc nhấn Delete để xóa khỏi playlist`}
-                          onDelete={() =>
-                            removePlaylistTrackWithUndo(selectedPlaylist.id, item, idx)
-                          }
+                {selectedPlaylist && (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between gap-2 p-3.5 rounded-2xl bg-white/5 border border-white/10">
+                      <div className="min-w-0">
+                        <h3 className="text-[15.5px] font-semibold text-white truncate">
+                          {selectedPlaylist.name}
+                        </h3>
+                        <p className="text-[13px] text-white/70">
+                          {selectedPlaylist.tracks.length} bài • Phát tự động liên tục
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => playEntirePlaylist(selectedPlaylist, 0)}
+                          className="neon-orb-primary px-3.5 py-2 rounded-full text-white text-[13px] font-semibold flex items-center gap-1 active:scale-95 transition"
                         >
-                          <div className="flex items-center gap-3 p-2.5 rounded-2xl bg-[#0b101d]/95 border border-white/10 hover:bg-white/10 transition">
-                            <span className="w-5 text-center text-xs font-semibold text-white/50 tabular-nums shrink-0">
-                              {idx + 1}
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => playEntirePlaylist(selectedPlaylist, idx)}
-                              className="flex items-center gap-3 flex-1 min-w-0 text-left"
-                            >
-                              <img
-                                src={`/api/image-proxy?url=${encodeURIComponent(
-                                  item.thumbnail
-                                )}`}
-                                alt={item.title}
-                                className="w-10 h-10 rounded-xl object-cover bg-white/10 shrink-0"
-                              />
-                              <div className="min-w-0 flex-1">
-                                <p className="text-sm font-medium text-white truncate">
-                                  {item.title}
-                                </p>
-                                <p className="text-xs text-white/60 truncate">
-                                  {item.author}
-                                </p>
-                              </div>
-                            </button>
+                          <PlayCircle className="w-4 h-4" />
+                          <span>Phát tất cả</span>
+                        </button>
+                        {playlists.length > 1 && (
+                          <HoldToDeleteButton
+                            label="Giữ xóa"
+                            holdingLabel="Đang giữ..."
+                            ariaLabel={`Nhấn giữ để xóa playlist ${selectedPlaylist.name}`}
+                            onConfirm={() => handleDeletePlaylist(selectedPlaylist.id)}
+                          />
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="space-y-2 max-h-64 overflow-y-auto no-scrollbar u039-stagger">
+                      {selectedPlaylist.tracks.length === 0 ? (
+                        <p className="text-center text-[15px] text-white/60 py-6">
+                          Playlist trống. Bấm biểu tượng thư mục (+) trên bài hát để thêm vào đây!
+                        </p>
+                      ) : (
+                        selectedPlaylist.tracks.map((item, idx) => (
+                          <SwipeToDeleteRow
+                            key={`${item.id}_${idx}`}
+                            ariaLabel={`${item.title}. Vuốt trái hoặc nhấn Delete để xóa khỏi playlist`}
+                            onDelete={() =>
+                              removePlaylistTrackWithUndo(selectedPlaylist.id, item, idx)
+                            }
+                          >
+                            <div className="flex items-center gap-3 p-2.5 rounded-2xl bg-[#0b101d]/95 border border-white/10 hover:bg-white/10 transition">
+                              <span className="w-5 text-center text-[13px] font-semibold text-white/55 tabular-nums shrink-0">
+                                {idx + 1}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => playEntirePlaylist(selectedPlaylist, idx)}
+                                className="flex items-center gap-3 flex-1 min-w-0 text-left"
+                              >
+                                <img
+                                  src={`/api/image-proxy?url=${encodeURIComponent(
+                                    item.thumbnail
+                                  )}`}
+                                  alt={item.title}
+                                  className="w-11 h-11 rounded-xl object-cover bg-white/10 shrink-0"
+                                />
+                                <div className="min-w-0 flex-1">
+                                  <p className="text-[15.5px] font-medium text-white truncate">
+                                    {item.title}
+                                  </p>
+                                  <p className="text-[13px] text-white/70 truncate">
+                                    {item.author}
+                                  </p>
+                                </div>
+                              </button>
                             <button
                               type="button"
                               onClick={() =>
@@ -2646,7 +3030,7 @@ export default function AudioPlayerPage() {
 
           {/* TAB 3: LỊCH SỬ BÀI TỪNG NGHE */}
           {activeTab === 'history' && (
-            <div className="space-y-2 max-h-72 overflow-y-auto no-scrollbar u039-stagger">
+            <div className="space-y-2.5 max-h-[24rem] overflow-y-auto no-scrollbar u039-stagger">
               {deletedHistoryBackup && (
                 <HoldToDeleteUndoBar
                   message={`Đã xóa ${deletedHistoryBackup.length} bài trong lịch sử`}
@@ -2655,13 +3039,13 @@ export default function AudioPlayerPage() {
               )}
 
               {history.length === 0 ? (
-                <p className="text-center text-sm text-white/50 py-8">
+                <p className="text-center text-[15px] text-white/60 py-8">
                   Lịch sử trống. Các bài từng nghe sẽ lưu lại tại đây để lần sau ấn vô là phát ngay!
                 </p>
               ) : (
                 <>
                   <div className="flex justify-between items-center gap-2 px-1 mb-1">
-                    <span className="text-xs text-white/60">
+                    <span className="text-[13px] text-white/70">
                       Ấn vào bài để phát ngay
                     </span>
                     <HoldToDeleteButton
@@ -2676,7 +3060,7 @@ export default function AudioPlayerPage() {
                       key={item.id}
                       className="flex items-center gap-3 p-2.5 rounded-2xl bg-white/5 border border-white/10 hover:bg-white/10 transition"
                     >
-                      <span className="w-5 text-center text-xs font-semibold text-white/50 tabular-nums shrink-0">
+                      <span className="w-5 text-center text-[13px] font-semibold text-white/55 tabular-nums shrink-0">
                         {idx + 1}
                       </span>
                       <button
@@ -2687,15 +3071,15 @@ export default function AudioPlayerPage() {
                         <img
                           src={`/api/image-proxy?url=${encodeURIComponent(item.thumbnail)}`}
                           alt={item.title}
-                          className="w-11 h-11 rounded-xl object-cover bg-white/10 border border-white/15 shrink-0"
+                          className="w-12 h-12 rounded-xl object-cover bg-white/10 border border-white/15 shrink-0"
                         />
                         <div className="min-w-0 flex-1">
-                          <p className="text-sm font-semibold text-white truncate">
+                          <p className="text-[15.5px] font-semibold text-white truncate">
                             {item.title}
                           </p>
-                          <p className="text-xs text-white/60 truncate">
+                          <p className="text-[13px] text-white/70 truncate">
                             {item.author} •{' '}
-                            <span className="uppercase text-[10px] text-cyan-300">
+                            <span className="uppercase text-[11px] font-bold text-cyan-300">
                               {item.source}
                             </span>
                           </p>
@@ -2748,6 +3132,7 @@ export default function AudioPlayerPage() {
           onWaiting={startStallWatchdog}
           onStalled={startStallWatchdog}
           onError={() => {
+            if (isSwitchingTrackRef.current) return;
             if (
               audioRef.current &&
               audioRef.current.src &&

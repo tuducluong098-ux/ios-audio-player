@@ -125,8 +125,8 @@ export function SettingsModal({
               <Settings className="w-4 h-4 text-cyan-300" />
             </div>
             <div>
-              <h3 className="text-base font-semibold text-white">Cài đặt</h3>
-              <p className="text-xs text-white/75">Đồng bộ Cloud &amp; Dynamic Island</p>
+              <h3 className="text-lg font-semibold text-white">Cài đặt</h3>
+              <p className="text-[13px] text-white/75">Đồng bộ Cloud &amp; Dynamic Island</p>
             </div>
           </div>
           <button
@@ -143,7 +143,7 @@ export function SettingsModal({
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <Cloud className="w-4 h-4 text-cyan-300" />
-              <span className="text-sm font-semibold text-white">
+              <span className="text-[15.5px] font-semibold text-white">
                 Đồng bộ bài hát Cloud
               </span>
             </div>
@@ -279,12 +279,12 @@ export function SettingsModal({
         {/* 2. Chức năng Dynamic Island: Đổi bài vs Tua ±5s */}
         <div className="p-4 rounded-2xl bg-[#131b2e]/90 border border-white/15 space-y-3">
           <div className="flex items-center justify-between">
-            <span className="text-sm font-semibold text-white">
+            <span className="text-[15.5px] font-semibold text-white">
               Nút trên Dynamic Island
             </span>
-            <span className="text-[11px] text-cyan-300 font-medium">Màn hình khóa</span>
+            <span className="text-xs text-cyan-300 font-medium">Màn hình khóa</span>
           </div>
-          <p className="text-xs text-white/75 leading-relaxed">
+          <p className="text-[13px] text-white/75 leading-relaxed">
             Chọn cặp nút hiển thị trên Dynamic Island &amp; Khóa màn hình iPhone:
           </p>
 
@@ -292,7 +292,7 @@ export function SettingsModal({
             <button
               type="button"
               onClick={() => onChangeLockScreenMode('track')}
-              className={`py-2.5 px-3 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 border transition ${
+              className={`py-2.5 px-3 rounded-xl text-[13.5px] font-semibold flex items-center justify-center gap-1.5 border transition ${
                 lockScreenControlMode === 'track'
                   ? 'neon-orb-primary text-white border-transparent'
                   : 'bg-white/8 border-white/15 text-white/80 hover:text-white'
@@ -305,7 +305,7 @@ export function SettingsModal({
             <button
               type="button"
               onClick={() => onChangeLockScreenMode('seek')}
-              className={`py-2.5 px-3 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 border transition ${
+              className={`py-2.5 px-3 rounded-xl text-[13.5px] font-semibold flex items-center justify-center gap-1.5 border transition ${
                 lockScreenControlMode === 'seek'
                   ? 'neon-orb-primary text-white border-transparent'
                   : 'bg-white/8 border-white/15 text-white/80 hover:text-white'
@@ -322,11 +322,11 @@ export function SettingsModal({
           <div className="space-y-0.5 min-w-0 flex-1">
             <div className="flex items-center gap-1.5">
               <Sparkles className="w-4 h-4 text-pink-300 shrink-0" />
-              <span className="text-sm font-semibold text-white">
+              <span className="text-[15.5px] font-semibold text-white">
                 Gợi ý &amp; Tự phát tiếp
               </span>
             </div>
-            <p className="text-xs text-white/75 leading-relaxed">
+            <p className="text-[13px] text-white/75 leading-relaxed">
               Hiện tab Gợi ý (YouTube, SoundCloud, TikTok, Spotify) và tự nối bài khi hết danh sách.
             </p>
           </div>
@@ -343,9 +343,9 @@ export function SettingsModal({
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <Volume2 className="w-4 h-4 text-cyan-300" />
-              <span className="text-sm font-semibold text-white">Âm lượng phát</span>
+              <span className="text-[15.5px] font-semibold text-white">Âm lượng phát</span>
             </div>
-            <span className="text-xs font-semibold text-white/85 tabular-nums">
+            <span className="text-[13px] font-semibold text-white/85 tabular-nums">
               {volumePct}%
             </span>
           </div>
@@ -361,7 +361,7 @@ export function SettingsModal({
             }}
             className="apple-slider w-full"
           />
-          <p className="text-[11px] text-white/70">
+          <p className="text-xs text-white/70">
             Trên iPhone hãy dùng nút âm lượng cứng ở cạnh máy (iOS khóa web chỉnh âm lượng).
           </p>
         </div>
@@ -369,10 +369,10 @@ export function SettingsModal({
         {/* 4. Sao lưu & Khôi phục thủ công (.json) */}
         <div className="p-4 rounded-2xl bg-[#131b2e]/90 border border-white/15 space-y-2.5">
           <div>
-            <h4 className="text-sm font-semibold text-white">
+            <h4 className="text-[15.5px] font-semibold text-white">
               Backup thủ công (.json)
             </h4>
-            <p className="text-xs text-white/75 mt-0.5">
+            <p className="text-[13px] text-white/75 mt-0.5">
               Đang lưu {savedCount.playlists} playlist &amp; {savedCount.history} bài đã nghe.
             </p>
           </div>
