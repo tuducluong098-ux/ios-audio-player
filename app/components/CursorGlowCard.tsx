@@ -9,77 +9,59 @@ interface CursorGlowCardProps {
 }
 
 /**
- * Thẻ Liquid Glass có viền & hào quang phát sáng mượt theo vị trí con trỏ/chạm (#228).
+ * Thẻ Liquid Glass 60fps trên GPU: viền cầu vồng lướt nhẹ + vệt sáng theo trỏ/chạm & bloom khi chạm (#228).
  */
 export const CursorGlowCard = forwardRef<HTMLElement, CursorGlowCardProps>(
   function CursorGlowCard({ children, className = '' }, forwardedRef) {
     const shellRef = useRef<HTMLElement | null>(null);
-    const innerRef = useRef<HTMLDivElement | null>(null);
+    const beamRef = useRef<HTMLSpanElement | null>(null);
+    const rippleRef = useRef<HTMLSpanElement | null>(null);
 
     useImperativeHandle(forwardedRef, () => shellRef.current as HTMLElement);
 
     useEffect(() => {
       const shell = shellRef.current;
-      const inner = innerRef.current;
-      if (!shell || !inner) return;
+      const beam = beamRef.current;
+      const ripple = rippleRef.current;
+      if (!shell || !beam) return;
 
       const rm = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-      let px = -400;
-      let py = -400;
-      let o = 0;
-      let oT = 0;
-      let raf = 0;
-      let last = 0;
+      let pointerActive = false;
 
-      const apply = () => {
-        shell.style.setProperty('--cx', `${px.toFixed(1)}px`);
-        shell.style.setProperty('--cy', `${py.toFixed(1)}px`);
-        shell.style.setProperty('--o', o.toFixed(3));
-        inner.style.setProperty('--ix', `${(px - 1.5).toFixed(1)}px`);
-        inner.style.setProperty('--iy', `${(py - 1.5).toFixed(1)}px`);
-        inner.style.setProperty('--o', o.toFixed(3));
-      };
-
-      const frame = (now: number) => {
-        raf = 0;
-        if (!shell.isConnected) return;
-        const dt = Math.min(0.05, Math.max(0, (now - last) / 1000));
-        last = now;
-        o += (oT - o) * (rm ? 1 : Math.min(1, dt * (oT ? 8 : 2.5)));
-        apply();
-        if (Math.abs(oT - o) > 0.005) {
-          raf = requestAnimationFrame(frame);
-        }
-      };
-
-      const kick = () => {
-        if (!raf) {
-          last = performance.now();
-          raf = requestAnimationFrame(frame);
-        }
-      };
-
-      const updatePoint = (clientX: number, clientY: number) => {
+      const moveBeam = (clientX: number, clientY: number) => {
         const rect = shell.getBoundingClientRect();
-        px = clientX - rect.left;
-        py = clientY - rect.top;
-        oT = 1;
-        apply();
-        kick();
+        const x = clientX - rect.left;
+        const y = clientY - rect.top;
+        beam.style.transform = `translate3d(${x.toFixed(1)}px, ${y.toFixed(1)}px, 0)`;
+        beam.style.opacity = '1';
+      };
+
+      const triggerRipple = (clientX: number, clientY: number) => {
+        if (!ripple || rm) return;
+        const rect = shell.getBoundingClientRect();
+        const x = clientX - rect.left;
+        const y = clientY - rect.top;
+        ripple.style.setProperty('--tx', `${x.toFixed(1)}px`);
+        ripple.style.setProperty('--ty', `${y.toFixed(1)}px`);
+        ripple.classList.remove('is-blooming');
+        void ripple.offsetWidth;
+        ripple.classList.add('is-blooming');
       };
 
       const onPointerDown = (e: PointerEvent) => {
-        updatePoint(e.clientX, e.clientY);
+        pointerActive = true;
+        moveBeam(e.clientX, e.clientY);
+        triggerRipple(e.clientX, e.clientY);
       };
 
       const onPointerMove = (e: PointerEvent) => {
-        if (e.pointerType === 'touch' && oT === 0) return;
-        updatePoint(e.clientX, e.clientY);
+        if (e.pointerType === 'touch' && !pointerActive) return;
+        moveBeam(e.clientX, e.clientY);
       };
 
       const onPointerOff = () => {
-        oT = 0;
-        kick();
+        pointerActive = false;
+        beam.style.opacity = '0';
       };
 
       shell.addEventListener('pointerdown', onPointerDown);
@@ -88,10 +70,7 @@ export const CursorGlowCard = forwardRef<HTMLElement, CursorGlowCardProps>(
       shell.addEventListener('pointerup', onPointerOff);
       shell.addEventListener('pointercancel', onPointerOff);
 
-      apply();
-
       return () => {
-        if (raf) cancelAnimationFrame(raf);
         shell.removeEventListener('pointerdown', onPointerDown);
         shell.removeEventListener('pointermove', onPointerMove);
         shell.removeEventListener('pointerleave', onPointerOff);
@@ -102,7 +81,10 @@ export const CursorGlowCard = forwardRef<HTMLElement, CursorGlowCardProps>(
 
     return (
       <section ref={shellRef} className="ux u228-shell">
-        <div ref={innerRef} className={`u228-inner ${className}`}>
+        <span className="u228-prism" aria-hidden="true" />
+        <span ref={beamRef} className="u228-beam" aria-hidden="true" />
+        <div className={`u228-inner ${className}`}>
+          <span ref={rippleRef} className="u228-ripple" aria-hidden="true" />
           {children}
         </div>
       </section>

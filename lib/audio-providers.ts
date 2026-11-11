@@ -1,6 +1,11 @@
 import { Ytdl, SearchType, chooseFormat, Quality } from '@distube/ytdl-core';
 
-export const ytdl = new Ytdl({ timeoutMs: 8000 });
+export const ytdl = new Ytdl({
+  timeoutMs: 8000,
+  country: 'VN',
+  lang: 'vi',
+  utcOffsetMinutes: 420,
+});
 
 export const IPHONE_UA =
   'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';
@@ -713,8 +718,122 @@ export async function extractSpotify(url: string): Promise<
   };
 }
 
+const VIET_CHAR_RE =
+  /[àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ]/i;
+
+const VIET_MUSIC_WORD_RE =
+  /\b(nhac|viet|vpop|vinahouse|bolero|lofi viet|tiktok|remix|cua|khong|anh|em|yeu|tinh|buon|dem|mua|sau|thuong|nho)\b/i;
+
+function isLikelyVietnamese(text: string): boolean {
+  return VIET_CHAR_RE.test(text) || VIET_MUSIC_WORD_RE.test(text);
+}
+
+function cleanTrackQuery(rawTitle?: string, rawAuthor?: string): {
+  query: string;
+  isGenericSound: boolean;
+} {
+  const author = (rawAuthor || '').trim();
+  const stripped = (rawTitle || '')
+    .replace(/^(âm thanh gốc|nhạc nền|original sound|original audio|nhạc của|sound by)\s*[-–:|]?\s*/i, '')
+    .replace(/[\[(](official\s*(mv|music\s*video|audio|lyric\s*video)|mv|lyrics?|audio|visualizer|hd|4k)[\])]/gi, '')
+    .replace(/#\S+/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const lowerTitle = stripped.toLowerCase();
+  const lowerAuthor = author.toLowerCase();
+
+  // TikTok thường đặt tên âm thanh trùng tên tài khoản đăng clip -> tránh tìm theo username gây lạc sang nhạc nước ngoài
+  const isGenericSound =
+    !stripped ||
+    stripped.length < 3 ||
+    (lowerAuthor.length >= 2 &&
+      (lowerTitle === lowerAuthor || lowerTitle === `@${lowerAuthor}`));
+
+  if (isGenericSound) {
+    return {
+      query: 'nhạc trẻ việt nam hot tiktok chill remix',
+      isGenericSound: true,
+    };
+  }
+
+  const combined =
+    author && !lowerTitle.includes(lowerAuthor)
+      ? `${stripped} ${author}`.trim()
+      : stripped;
+
+  return { query: combined, isGenericSound: false };
+}
+
+function mapYtSummaries(
+  items: readonly {
+    id: string;
+    url: string;
+    title: string;
+    author?: { name?: string };
+    thumbnails?: readonly { url: string }[];
+    isLive?: boolean;
+    lengthSeconds?: number;
+  }[],
+  excludeUrl?: string
+): SuggestedTrack[] {
+  const seen = new Set<string>();
+  const out: SuggestedTrack[] = [];
+
+  for (const v of items) {
+    if (!v.url || !v.title || v.isLive) continue;
+    if (v.lengthSeconds && v.lengthSeconds > 900) continue; // Tránh podcast/video quá 15 phút
+    if (excludeUrl && v.url === excludeUrl) continue;
+    if (seen.has(v.url)) continue;
+    seen.add(v.url);
+
+    out.push({
+      id: `yt_${v.id}`,
+      url: v.url,
+      title: v.title,
+      author: v.author?.name || 'YouTube Music',
+      thumbnail:
+        v.thumbnails?.[v.thumbnails.length - 1]?.url ||
+        `https://i.ytimg.com/vi/${v.id}/hqdefault.jpg`,
+      source: 'youtube',
+    });
+  }
+
+  return out;
+}
+
+function prioritizeVietnamese(
+  items: SuggestedTrack[],
+  preferVietnamese: boolean
+): SuggestedTrack[] {
+  if (!preferVietnamese) return items;
+  const vi: SuggestedTrack[] = [];
+  const other: SuggestedTrack[] = [];
+  for (const item of items) {
+    if (isLikelyVietnamese(`${item.title} ${item.author}`)) {
+      vi.push(item);
+    } else {
+      other.push(item);
+    }
+  }
+  return [...vi, ...other];
+}
+
+function dedupeSuggestions(items: SuggestedTrack[]): SuggestedTrack[] {
+  const seen = new Set<string>();
+  const out: SuggestedTrack[] = [];
+  for (const item of items) {
+    const key = `${item.source}:${item.id}`;
+    if (seen.has(key) || seen.has(item.url)) continue;
+    seen.add(key);
+    seen.add(item.url);
+    out.push(item);
+  }
+  return out;
+}
+
 /**
- * Lấy danh sách bài gợi ý (Related Tracks) theo bài đang nghe
+ * Lấy danh sách bài gợi ý (Related Tracks) theo bài đang nghe (ưu tiên khu vực VN & giữ gu nhạc Việt)
  */
 export async function getRelatedTracks(input: {
   id?: string;
@@ -725,36 +844,40 @@ export async function getRelatedTracks(input: {
 }): Promise<SuggestedTrack[]> {
   const source = input.source;
   const originalUrl = input.originalUrl || '';
+  const seedText = `${input.title || ''} ${input.author || ''}`;
+  const preferVietnamese =
+    isLikelyVietnamese(seedText) || source === 'tiktok';
 
-  // 1. YouTube -> Dùng YouTube Music Radio trực tiếp
+  // 1. YouTube -> Dùng YouTube Music Radio + Related Videos khu vực VN
   if (source === 'youtube' && /youtube\.com|youtu\.be/i.test(originalUrl)) {
     try {
-      let related = await ytdl.getRelated(originalUrl, {
-        music: true,
-        signal: AbortSignal.timeout(6000),
-      });
-      if (related.length === 0) {
-        related = await ytdl.getRelated(originalUrl, {
-          signal: AbortSignal.timeout(5000),
-        });
-      }
-      return related
-        .filter((v) => !v.isLive && v.url && v.title)
-        .slice(0, 8)
-        .map((v) => ({
-          id: `yt_${v.id}`,
-          url: v.url,
-          title: v.title,
-          author: v.author?.name || 'YouTube',
-          thumbnail:
-            v.thumbnails?.[v.thumbnails.length - 1]?.url ||
-            `https://i.ytimg.com/vi/${v.id}/hqdefault.jpg`,
-          source: 'youtube',
-        }));
+      const [musicRelated, videoRelated] = await Promise.all([
+        ytdl
+          .getRelated(originalUrl, {
+            music: true,
+            signal: AbortSignal.timeout(5500),
+          })
+          .catch(() => []),
+        ytdl
+          .getRelated(originalUrl, {
+            music: false,
+            signal: AbortSignal.timeout(5500),
+          })
+          .catch(() => []),
+      ]);
+
+      const merged = dedupeSuggestions([
+        ...mapYtSummaries(musicRelated, originalUrl),
+        ...mapYtSummaries(videoRelated, originalUrl),
+      ]);
+
+      const ranked = prioritizeVietnamese(merged, preferVietnamese);
+      if (ranked.length > 0) return ranked.slice(0, 8);
     } catch {}
   }
 
-  // 2. SoundCloud -> Dùng Related Tracks API theo Track ID
+  // 2. SoundCloud -> Dùng Related Tracks API, nếu seed là nhạc Việt thì bổ sung thêm YouTube VN để tránh bị loãng sang nhạc US/EDM
+  const scSuggestions: SuggestedTrack[] = [];
   if (source === 'soundcloud') {
     try {
       const cid = await getSoundCloudClientId();
@@ -762,118 +885,119 @@ export async function getRelatedTracks(input: {
 
       if (numericId) {
         const relRes = await fetch(
-          `https://api-v2.soundcloud.com/tracks/${numericId}/related?limit=8&client_id=${cid}`,
+          `https://api-v2.soundcloud.com/tracks/${numericId}/related?limit=10&client_id=${cid}`,
           { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(5000) }
         );
         if (relRes.ok) {
           const relJson = await relRes.json();
           const items = (relJson?.collection || []) as ScTrackRaw[];
-          if (items.length > 0) {
-            return items
-              .filter((t) => t.permalink_url && t.title)
-              .slice(0, 8)
-              .map((t) => ({
-                id: `sc_${t.id || Date.now()}`,
-                url: t.permalink_url!,
-                title: t.title!,
-                author: t.user?.username || 'SoundCloud',
-                thumbnail: (
-                  t.artwork_url ||
-                  t.user?.avatar_url ||
-                  'https://placehold.co/512x512/18181b/ffffff.jpg?text=SoundCloud'
-                ).replace('-large', '-t500x500'),
-                source: 'soundcloud',
-              }));
+          for (const t of items) {
+            if (!t.permalink_url || !t.title) continue;
+            scSuggestions.push({
+              id: `sc_${t.id || Date.now()}`,
+              url: t.permalink_url,
+              title: t.title,
+              author: t.user?.username || 'SoundCloud',
+              thumbnail: (
+                t.artwork_url ||
+                t.user?.avatar_url ||
+                'https://placehold.co/512x512/18181b/ffffff.jpg?text=SoundCloud'
+              ).replace('-large', '-t500x500'),
+              source: 'soundcloud',
+            });
           }
         }
       }
     } catch {}
+
+    const viSc = scSuggestions.filter((t) =>
+      isLikelyVietnamese(`${t.title} ${t.author}`)
+    );
+    if (!preferVietnamese && scSuggestions.length > 0) {
+      return scSuggestions.slice(0, 8);
+    }
+    if (preferVietnamese && viSc.length >= 5) {
+      return prioritizeVietnamese(scSuggestions, true).slice(0, 8);
+    }
   }
 
-  // 3. Spotify / TikTok / Fallback chung -> Tìm bài liên quan từ YouTube Music & SoundCloud theo tên bài
-  const cleanTitle = (input.title || '')
-    .replace(/^(âm thanh gốc|nhạc nền|original sound)\s*[-–:]\s*/i, '')
-    .trim();
-  const query = `${cleanTitle} ${input.author || ''}`.trim();
-  if (!query) return [];
+  // 3. Spotify / TikTok / SoundCloud nhạc Việt cần bổ sung -> Tìm qua YouTube Music & YouTube VN theo tên bài
+  const { query, isGenericSound } = cleanTrackQuery(input.title, input.author);
+  if (!query) return scSuggestions.slice(0, 8);
 
-  const suggestions: SuggestedTrack[] = [];
+  const ytSuggestions: SuggestedTrack[] = [];
 
   try {
     const songs = await ytdl.search(query, {
       type: SearchType.Song,
-      limit: 5,
+      limit: 6,
       signal: AbortSignal.timeout(5000),
     });
 
-    // Nếu tìm được bài hạt giống, lấy Radio liên quan từ YouTube Music cho chuẩn gu
-    if (songs[0]?.url) {
+    if (!isGenericSound && songs[0]?.url) {
       const radio = await ytdl
         .getRelated(songs[0].url, { music: true, signal: AbortSignal.timeout(5000) })
         .catch(() => []);
-      for (const v of radio.slice(0, 6)) {
-        if (!v.url || !v.title || v.isLive) continue;
-        suggestions.push({
-          id: `yt_${v.id}`,
-          url: v.url,
-          title: v.title,
-          author: v.author?.name || 'YouTube Music',
-          thumbnail:
-            v.thumbnails?.[v.thumbnails.length - 1]?.url ||
-            `https://i.ytimg.com/vi/${v.id}/hqdefault.jpg`,
-          source: 'youtube',
-        });
-      }
+      ytSuggestions.push(...mapYtSummaries(radio, originalUrl));
     }
 
-    if (suggestions.length < 4) {
-      for (const v of songs) {
-        if (!v.url || !v.title) continue;
-        if (suggestions.some((s) => s.url === v.url)) continue;
-        suggestions.push({
-          id: `yt_${v.id}`,
-          url: v.url,
-          title: v.title,
-          author: v.author?.name || 'YouTube Music',
-          thumbnail:
-            v.thumbnails?.[v.thumbnails.length - 1]?.url ||
-            `https://i.ytimg.com/vi/${v.id}/hqdefault.jpg`,
-          source: 'youtube',
-        });
-      }
+    if (ytSuggestions.length < 6) {
+      ytSuggestions.push(...mapYtSummaries(songs, originalUrl));
+    }
+
+    if (ytSuggestions.length < 4) {
+      const videos = await ytdl
+        .search(preferVietnamese ? `${query} nhạc việt` : query, {
+          type: SearchType.Video,
+          limit: 6,
+          signal: AbortSignal.timeout(4500),
+        })
+        .catch(() => []);
+      ytSuggestions.push(...mapYtSummaries(videos, originalUrl));
     }
   } catch {}
 
-  if (suggestions.length < 4) {
-    try {
-      const cid = await getSoundCloudClientId();
-      const scRes = await fetch(
-        `https://api-v2.soundcloud.com/search/tracks?q=${encodeURIComponent(
-          query
-        )}&limit=6&client_id=${cid}`,
-        { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(4500) }
-      );
-      if (scRes.ok) {
-        const scJson = await scRes.json();
-        const items = (scJson?.collection || []) as ScTrackRaw[];
-        for (const t of items) {
-          if (!t.permalink_url || !t.title) continue;
-          suggestions.push({
-            id: `sc_${t.id || Date.now()}`,
-            url: t.permalink_url,
-            title: t.title,
-            author: t.user?.username || 'SoundCloud',
-            thumbnail: (
-              t.artwork_url ||
-              t.user?.avatar_url ||
-              'https://placehold.co/512x512/18181b/ffffff.jpg?text=SoundCloud'
-            ).replace('-large', '-t500x500'),
-            source: 'soundcloud',
-          });
-        }
-      }
-    } catch {}
+  const combined = dedupeSuggestions(
+    preferVietnamese
+      ? [...ytSuggestions, ...scSuggestions]
+      : [...scSuggestions, ...ytSuggestions]
+  );
+
+  if (combined.length > 0) {
+    return prioritizeVietnamese(combined, preferVietnamese).slice(0, 8);
   }
 
-  return suggestions.slice(0, 8);
+  // Fallback cuối cùng sang SoundCloud Search nếu YouTube không trả về kết quả
+  try {
+    const cid = await getSoundCloudClientId();
+    const scRes = await fetch(
+      `https://api-v2.soundcloud.com/search/tracks?q=${encodeURIComponent(
+        query
+      )}&limit=6&client_id=${cid}`,
+      { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(4500) }
+    );
+    if (scRes.ok) {
+      const scJson = await scRes.json();
+      const items = (scJson?.collection || []) as ScTrackRaw[];
+      const out: SuggestedTrack[] = [];
+      for (const t of items) {
+        if (!t.permalink_url || !t.title) continue;
+        out.push({
+          id: `sc_${t.id || Date.now()}`,
+          url: t.permalink_url,
+          title: t.title,
+          author: t.user?.username || 'SoundCloud',
+          thumbnail: (
+            t.artwork_url ||
+            t.user?.avatar_url ||
+            'https://placehold.co/512x512/18181b/ffffff.jpg?text=SoundCloud'
+          ).replace('-large', '-t500x500'),
+          source: 'soundcloud',
+        });
+      }
+      return prioritizeVietnamese(out, preferVietnamese).slice(0, 8);
+    }
+  } catch {}
+
+  return [];
 }

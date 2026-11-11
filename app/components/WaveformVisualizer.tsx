@@ -11,14 +11,13 @@ interface WaveformVisualizerProps {
   onSeek?: (seconds: number) => void;
 }
 
-// Chiều cao cơ bản tạo hình sóng đối xứng Cyan -> Pink
 const WAVE_BARS = [
   24, 42, 30, 60, 48, 84, 56, 96, 68, 44, 78, 52, 92, 64, 88, 50, 74, 98, 62,
   86, 46, 70, 54, 82, 38, 58, 34, 22,
 ];
 
 /**
- * Sóng âm thanh chuyển sắc Cyan -> Indigo -> Pink, tự đồng bộ tiến trình & chạm để tua (#007).
+ * Sóng âm thanh chuyển sắc Cyan -> Indigo -> Pink 60fps trên GPU (chỉ scaleY, chạm để tua) (#007).
  */
 export function WaveformVisualizer({
   isPlaying,
@@ -90,7 +89,7 @@ export function WaveformVisualizer({
             ? ['#38bdf8', '#818cf8', '#e879f9']
             : ['#e879f9', '#ec4899', '#fb7185'];
 
-        const dur = `${(0.75 + ((idx * 17) % 7) * 0.11).toFixed(2)}s`;
+        const dur = `${(0.72 + ((idx * 17) % 7) * 0.1).toFixed(2)}s`;
         const delay = `${(-((idx * 0.13) % 1.2)).toFixed(2)}s`;
         const isLit = idx < litCount || duration <= 0;
 
@@ -98,13 +97,12 @@ export function WaveformVisualizer({
           <div
             key={idx}
             className={`u007-wave-bar ${isLit ? 'is-lit' : ''} ${
-              isPlaying ? 'wave-bar-active' : isLit ? 'opacity-75' : 'opacity-45'
+              isPlaying ? 'wave-bar-active' : 'is-paused'
             }`}
             style={
               {
-                height: isPlaying
-                  ? `${heightPct}%`
-                  : `${Math.max(18, Math.round(heightPct * 0.38))}%`,
+                height: `${heightPct}%`,
+                opacity: isPlaying ? (isLit ? 1 : 0.42) : isLit ? 0.65 : 0.3,
                 '--wave-dur': dur,
                 '--wave-delay': delay,
                 '--bar-from': barFrom,

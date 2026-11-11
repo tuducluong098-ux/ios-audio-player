@@ -36,7 +36,8 @@ export function LiquidGlassButton({
     btn.style.setProperty('--my', `${my}%`);
   };
 
-  const baseStyle = variant === 'primary' ? 'neon-orb-primary text-white' : 'liquid-btn';
+  const baseStyle =
+    variant === 'primary' ? 'neon-orb-primary text-white is-primary' : 'liquid-btn';
 
   return (
     <button

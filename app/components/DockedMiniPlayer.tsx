@@ -133,7 +133,9 @@ export function DockedMiniPlayer({
 
         <span
           className="u218-progress"
-          style={{ width: `${Math.max(0, Math.min(100, progressPct)).toFixed(2)}%` }}
+          style={{
+            transform: `scaleX(${(Math.max(0, Math.min(100, progressPct)) / 100).toFixed(4)})`,
+          }}
           aria-hidden="true"
         />
       </div>

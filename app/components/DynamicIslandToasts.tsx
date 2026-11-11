@@ -1,7 +1,7 @@
 // Lucian UX/UI Prompt #070 · MIT License (c) 2026 Seokwoooo · https://lucianlabs.dev/uxui-prompt/#070
 'use client';
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Check, X } from 'lucide-react';
 
 export interface IslandToastItem {
@@ -17,7 +17,7 @@ interface DynamicIslandToastsProps {
 const TOAST_DURATION_MS = 3200;
 
 /**
- * Thông báo nổi kiểu Dynamic Island xếp chồng đàn hồi, vuốt ngang để đóng (#070).
+ * Thông báo nổi kiểu Dynamic Island xếp chồng đàn hồi, chạy thanh tiến trình thuần CSS (#070).
  */
 export function DynamicIslandToasts({
   toasts,
@@ -26,17 +26,12 @@ export function DynamicIslandToasts({
   const [expanded, setExpanded] = useState(false);
   const [leavingIds, setLeavingIds] = useState<Record<number, number>>({});
   const [enteredIds, setEnteredIds] = useState<Record<number, boolean>>({});
-  const barRefs = useRef<Record<number, HTMLSpanElement | null>>({});
-  const remainingRef = useRef<Record<number, number>>({});
   const dragRef = useRef<{ id: number; startX: number; dx: number; el: HTMLDivElement } | null>(null);
   const removeTimersRef = useRef<Record<number, number>>({});
 
   useEffect(() => {
     const rafs: number[] = [];
     toasts.forEach((t) => {
-      if (remainingRef.current[t.id] === undefined) {
-        remainingRef.current[t.id] = TOAST_DURATION_MS;
-      }
       if (!enteredIds[t.id]) {
         const raf = requestAnimationFrame(() => {
           setEnteredIds((prev) => ({ ...prev, [t.id]: true }));
@@ -47,12 +42,15 @@ export function DynamicIslandToasts({
     return () => rafs.forEach(cancelAnimationFrame);
   }, [toasts, enteredIds]);
 
-  const triggerDismiss = React.useCallback(
+  const triggerDismiss = useCallback(
     (id: number, swipeDir = 0) => {
-      if (leavingIds[id] !== undefined) return;
-      setLeavingIds((prev) => ({ ...prev, [id]: swipeDir }));
-      const timer = window.setTimeout(() => {
-        delete remainingRef.current[id];
+      setLeavingIds((prev) => {
+        if (prev[id] !== undefined) return prev;
+        return { ...prev, [id]: swipeDir };
+      });
+      if (removeTimersRef.current[id]) return;
+
+      removeTimersRef.current[id] = window.setTimeout(() => {
         delete removeTimersRef.current[id];
         setLeavingIds((prev) => {
           const next = { ...prev };
@@ -65,10 +63,9 @@ export function DynamicIslandToasts({
           return next;
         });
         onDismiss(id);
-      }, 340);
-      removeTimersRef.current[id] = timer;
+      }, 320);
     },
-    [leavingIds, onDismiss]
+    [onDismiss]
   );
 
   useEffect(() => {
@@ -84,45 +81,21 @@ export function DynamicIslandToasts({
     }
   }, [toasts.length, expanded]);
 
+  // Chỉ hẹn 1 timer cho toast đang ở trên cùng, tạm dừng khi đang mở rộng stack
+  const frontId = toasts[0]?.id;
   useEffect(() => {
-    if (toasts.length === 0) return;
-
-    let rafId = 0;
-    let last = performance.now();
-
-    const tick = (now: number) => {
-      const dt = now - last;
-      last = now;
-
-      if (!expanded && toasts.length > 0) {
-        const front = toasts[0];
-        if (front && leavingIds[front.id] === undefined) {
-          const prevLeft = remainingRef.current[front.id] ?? TOAST_DURATION_MS;
-          const nextLeft = Math.max(0, prevLeft - dt);
-          remainingRef.current[front.id] = nextLeft;
-
-          const bar = barRefs.current[front.id];
-          if (bar) {
-            bar.style.setProperty('--left', (nextLeft / TOAST_DURATION_MS).toFixed(3));
-          }
-          if (nextLeft <= 0) {
-            triggerDismiss(front.id, 0);
-          }
-        }
-      }
-
-      rafId = requestAnimationFrame(tick);
-    };
-
-    rafId = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(rafId);
-  }, [toasts, expanded, leavingIds, triggerDismiss]);
+    if (!frontId || expanded || leavingIds[frontId] !== undefined) return;
+    const timer = window.setTimeout(() => {
+      triggerDismiss(frontId, 0);
+    }, TOAST_DURATION_MS);
+    return () => window.clearTimeout(timer);
+  }, [frontId, expanded, leavingIds, triggerDismiss]);
 
   if (toasts.length === 0) return null;
 
   return (
     <div
-      className="ux u070-zone"
+      className={`ux u070-zone ${expanded ? 'is-paused' : ''}`}
       role="region"
       aria-label="Thông báo"
       onPointerEnter={(e) => {
@@ -211,13 +184,7 @@ export function DynamicIslandToasts({
             >
               <X className="w-3.5 h-3.5" />
             </button>
-            <span
-              ref={(el) => {
-                barRefs.current[t.id] = el;
-              }}
-              className="u070-bar"
-              aria-hidden="true"
-            />
+            {idx === 0 && <span className="u070-bar" aria-hidden="true" />}
           </div>
         );
       })}

@@ -1512,18 +1512,36 @@ export default function AudioPlayerPage() {
 
   return (
     <main className="relative min-h-screen w-full overflow-x-hidden flex flex-col items-center px-4 pt-[max(1rem,env(safe-area-inset-top))] pb-[max(7.5rem,calc(env(safe-area-inset-bottom)+5.5rem))]">
-      {/* NỀN NEON LIQUID GLASS (CYAN & MAGENTA GLOW + BLURRED ARTWORK) */}
-      <div className="fixed inset-0 -z-10 overflow-hidden bg-[#05070e]">
-        <div className="animate-orb-slow absolute -top-24 -left-24 w-96 h-96 rounded-full bg-cyan-500/20 blur-[110px]" />
-        <div className="animate-orb-reverse absolute top-1/4 -right-24 w-96 h-96 rounded-full bg-pink-500/20 blur-[115px]" />
-        <div className="animate-orb-slow absolute -bottom-28 left-1/4 w-96 h-96 rounded-full bg-indigo-500/20 blur-[120px]" />
+      {/* NỀN NEON LIQUID GLASS (RADIAL GRADIENT THUẦN GPU, KHÔNG BLUR NẶNG GÂY LAG iOS) */}
+      <div className="fixed inset-0 -z-10 overflow-hidden bg-[#05070e] pointer-events-none">
+        <div
+          className="animate-orb-slow absolute -top-28 -left-28 w-[26rem] h-[26rem] rounded-full will-change-transform"
+          style={{
+            background:
+              'radial-gradient(circle, rgba(34,211,238,0.22) 0%, rgba(34,211,238,0.06) 45%, transparent 72%)',
+          }}
+        />
+        <div
+          className="animate-orb-reverse absolute top-1/4 -right-28 w-[26rem] h-[26rem] rounded-full will-change-transform"
+          style={{
+            background:
+              'radial-gradient(circle, rgba(236,72,153,0.2) 0%, rgba(236,72,153,0.05) 45%, transparent 72%)',
+          }}
+        />
+        <div
+          className="animate-orb-slow absolute -bottom-32 left-1/4 w-[26rem] h-[26rem] rounded-full will-change-transform"
+          style={{
+            background:
+              'radial-gradient(circle, rgba(129,140,248,0.2) 0%, rgba(129,140,248,0.05) 45%, transparent 72%)',
+          }}
+        />
 
         {currentTrack && (
           <img
             src={`/api/image-proxy?url=${encodeURIComponent(currentTrack.thumbnail)}`}
             alt=""
             aria-hidden="true"
-            className="absolute inset-0 w-full h-full object-cover scale-125 blur-[95px] opacity-25 saturate-150 transition-all duration-1000"
+            className="absolute inset-0 w-full h-full object-cover scale-115 blur-[38px] opacity-25 saturate-150 transition-opacity duration-700 transform-gpu"
           />
         )}
         <div className="absolute inset-0 bg-gradient-to-b from-[#05070e]/55 via-[#05070e]/45 to-[#05070e]/90" />
@@ -1537,8 +1555,8 @@ export default function AudioPlayerPage() {
 
       {/* POPUP LOADING QUAY VÒNG KIỂU APPLE HUD (KHI MỞ WEB HOẶC ĐANG TÁCH BÀI) */}
       {(loadingMode !== null || isBootLoading) && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-md flex items-center justify-center p-6">
-          <div className="liquid-glass rounded-[34px] px-10 py-8 flex flex-col items-center justify-center gap-4 min-w-[210px] shadow-[0_24px_70px_rgba(0,0,0,0.75)]">
+        <div className="la-modal-backdrop fixed inset-0 z-50 bg-black/65 backdrop-blur-sm flex items-center justify-center p-6">
+          <div className="la-modal-sheet liquid-glass rounded-[34px] px-10 py-8 flex flex-col items-center justify-center gap-4 min-w-[210px] shadow-[0_24px_70px_rgba(0,0,0,0.75)]">
             <AppleSpinner size={54} className="text-white" />
             <span className="text-base font-semibold tracking-tight text-white/95">
               Loading...
@@ -1549,8 +1567,8 @@ export default function AudioPlayerPage() {
 
       {/* POPUP 2 Ô TRÁI / PHẢI SAU KHI DÁN LINK (PHÁT NGAY | TIẾP THEO) */}
       {showLinkActionModal && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="liquid-glass w-full max-w-sm rounded-[34px] p-5 space-y-4">
+        <div className="la-modal-backdrop fixed inset-0 z-50 bg-black/72 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="la-modal-sheet liquid-glass w-full max-w-sm rounded-[34px] p-5 space-y-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2.5">
                 <div className="w-9 h-9 rounded-full bg-cyan-400/15 border border-cyan-300/30 flex items-center justify-center">
@@ -1675,8 +1693,8 @@ export default function AudioPlayerPage() {
 
       {/* MODAL CHỌN PLAYLIST */}
       {trackToAddPlaylist && (
-        <div className="fixed inset-0 z-50 bg-black/65 backdrop-blur-md flex items-end sm:items-center justify-center p-4">
-          <div className="liquid-glass w-full max-w-sm rounded-[32px] p-5 space-y-4">
+        <div className="la-modal-backdrop fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-end sm:items-center justify-center p-4">
+          <div className="la-modal-sheet liquid-glass w-full max-w-sm rounded-[32px] p-5 space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="text-base font-semibold tracking-tight text-white">
                 Thêm vào Playlist
@@ -1862,18 +1880,22 @@ export default function AudioPlayerPage() {
                 onSeek={seekToTime}
               />
 
-              <div className="relative">
+              <div className={`la-art-portal ${isPlaying ? 'is-playing' : ''}`}>
+                <span className="la-sonar-ring" aria-hidden="true" />
+                <span className="la-sonar-ring is-second" aria-hidden="true" />
+                <div className="la-art-aura" aria-hidden="true" />
                 <div
-                  className={`la-art-aura ${isPlaying ? 'is-playing' : ''}`}
-                  aria-hidden="true"
-                />
-                <img
-                  src={`/api/image-proxy?url=${encodeURIComponent(currentTrack.thumbnail)}`}
-                  alt={currentTrack.title}
-                  className={`relative w-24 h-24 rounded-full object-cover border-[3px] border-cyan-300/65 shadow-[0_0_25px_rgba(34,211,238,0.28)] transition-transform duration-500 ${
+                  className={`relative w-24 h-24 rounded-full overflow-hidden border-[2.5px] border-cyan-300/70 shadow-[0_0_24px_rgba(34,211,238,0.28)] transition-transform duration-500 ${
                     isPlaying ? 'scale-100' : 'scale-95 opacity-90'
                   }`}
-                />
+                >
+                  <img
+                    src={`/api/image-proxy?url=${encodeURIComponent(currentTrack.thumbnail)}`}
+                    alt={currentTrack.title}
+                    className="la-vinyl-spin w-full h-full object-cover"
+                  />
+                  <span className="la-art-glint" aria-hidden="true" />
+                </div>
               </div>
             </div>
 

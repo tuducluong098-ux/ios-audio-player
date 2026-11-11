@@ -116,8 +116,8 @@ export function SettingsModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-md flex items-end sm:items-center justify-center p-4">
-      <div className="liquid-glass w-full max-w-sm rounded-[34px] p-5 space-y-4 max-h-[88vh] overflow-y-auto no-scrollbar">
+    <div className="la-modal-backdrop fixed inset-0 z-50 bg-black/72 backdrop-blur-sm flex items-end sm:items-center justify-center p-4">
+      <div className="la-modal-sheet liquid-glass w-full max-w-sm rounded-[34px] p-5 space-y-4 max-h-[88vh] overflow-y-auto no-scrollbar">
         {/* Header */}
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2.5">

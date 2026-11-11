@@ -89,8 +89,8 @@ export function CircularTimerModal({
   const ticks = Array.from({ length: 60 }, (_, i) => i + 1);
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/65 backdrop-blur-md flex items-center justify-center p-4">
-      <div className="liquid-glass w-full max-w-sm rounded-[36px] p-6 space-y-5">
+    <div className="la-modal-backdrop fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+      <div className="la-modal-sheet liquid-glass w-full max-w-sm rounded-[36px] p-6 space-y-5">
         {/* Header */}
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
