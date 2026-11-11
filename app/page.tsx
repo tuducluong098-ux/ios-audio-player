@@ -179,6 +179,8 @@ export default function AudioPlayerPage() {
   const stallTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const suggestionsEnabledRef = useRef<boolean>(suggestionsEnabled);
   const suggestionsRef = useRef<SuggestedTrack[]>(suggestions);
+  const audioUnlockedRef = useRef<boolean>(false);
+  const prefetchedSuggestCacheRef = useRef<Map<string, TrackData>>(new Map());
 
   useEffect(() => {
     queueRef.current = queue;
@@ -420,6 +422,7 @@ export default function AudioPlayerPage() {
     }
 
     const controller = new AbortController();
+    let prefetchTimer: number | null = null;
     setLoadingSuggestions(true);
 
     fetch('/api/related', {
@@ -439,7 +442,36 @@ export default function AudioPlayerPage() {
       .then((res) => res.json())
       .then((json) => {
         if (Array.isArray(json?.suggestions)) {
-          setSuggestions(json.suggestions);
+          const list = json.suggestions as SuggestedTrack[];
+          setSuggestions(list);
+
+          // Prefetch ngầm bài gợi ý top 1 sau 1.2s để bấm nghe là phát tức thì
+          const topItem = list[0];
+          if (topItem?.url && !prefetchedSuggestCacheRef.current.has(topItem.url)) {
+            prefetchTimer = window.setTimeout(() => {
+              if (controller.signal.aborted) return;
+              fetch('/api/extract', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url: topItem.url }),
+                signal: controller.signal,
+              })
+                .then((r) => (r.ok ? r.json() : null))
+                .then((data) => {
+                  if (data && data.audioUrl && !data.error) {
+                    prefetchedSuggestCacheRef.current.set(topItem.url, {
+                      ...(data as TrackData),
+                      id: topItem.id,
+                      title: topItem.title || data.title,
+                      author: topItem.author || data.author,
+                      thumbnail: topItem.thumbnail || data.thumbnail,
+                      source: topItem.source || data.source,
+                    });
+                  }
+                })
+                .catch(() => {});
+            }, 1200);
+          }
         }
       })
       .catch(() => {})
@@ -449,7 +481,12 @@ export default function AudioPlayerPage() {
         }
       });
 
-    return () => controller.abort();
+    return () => {
+      controller.abort();
+      if (prefetchTimer !== null) {
+        window.clearTimeout(prefetchTimer);
+      }
+    };
   }, [currentTrack?.id, currentTrack?.originalUrl, suggestionsEnabled]);
 
   const handleChangeLockScreenMode = (mode: 'track' | 'seek') => {
@@ -498,13 +535,14 @@ export default function AudioPlayerPage() {
   };
 
   /**
-   * MỞ KHÓA AUDIO TRÊN iOS SAFARI NGAY TRONG LUỒNG CHẠM ĐỒNG BỘ
+   * MỞ KHÓA AUDIO TRÊN iOS SAFARI NGAY TRONG LUỒNG CHẠM ĐỒNG BỘ (chỉ chạy 1 lần, không chặn fetch)
    */
   const unlockAudioOnUserGesture = useCallback(async () => {
     const audio = audioRef.current;
-    if (!audio) return;
+    if (!audio || audioUnlockedRef.current) return;
+    audioUnlockedRef.current = true;
     try {
-      if (audio.paused) {
+      if (audio.paused && (!audio.src || audio.src === SILENT_AUDIO_URI)) {
         audio.src = SILENT_AUDIO_URI;
         const p = audio.play();
         if (p !== undefined) await p.catch(() => {});
@@ -634,7 +672,6 @@ export default function AudioPlayerPage() {
       }
 
       audio.src = track.audioUrl;
-      audio.load();
       await audio.play();
     },
     []
@@ -1158,11 +1195,11 @@ export default function AudioPlayerPage() {
     }
 
     setShowLinkActionModal(false);
-    await unlockAudioOnUserGesture();
+    const unlockPromise = unlockAudioOnUserGesture();
     setLoadingMode(mode);
 
     try {
-      const result = await fetchExtractRaw(finalUrl);
+      const [result] = await Promise.all([fetchExtractRaw(finalUrl), unlockPromise]);
       setInputUrl('');
       setPendingUrl('');
 
@@ -1214,17 +1251,27 @@ export default function AudioPlayerPage() {
   };
 
   const playSuggestedTrack = async (item: SuggestedTrack, playNow: boolean) => {
-    const track: TrackData = {
-      id: item.id,
-      originalUrl: item.url,
-      audioUrl: '',
-      title: item.title,
-      author: item.author,
-      thumbnail: item.thumbnail,
-      source: item.source,
-      mimeType: 'audio/mp4',
-      extractedAt: 0,
-    };
+    const cached = prefetchedSuggestCacheRef.current.get(item.url);
+    const ttl = item.source === 'soundcloud' ? SOUNDCLOUD_TTL_MS : STREAM_TTL_MS;
+    const isFresh =
+      cached &&
+      cached.audioUrl &&
+      cached.extractedAt &&
+      Date.now() - cached.extractedAt <= ttl;
+
+    const track: TrackData = isFresh
+      ? cached
+      : {
+          id: item.id,
+          originalUrl: item.url,
+          audioUrl: '',
+          title: item.title,
+          author: item.author,
+          thumbnail: item.thumbnail,
+          source: item.source,
+          mimeType: 'audio/mp4',
+          extractedAt: 0,
+        };
     await playFromSavedTrack(track, playNow);
   };
 
@@ -1233,7 +1280,7 @@ export default function AudioPlayerPage() {
     if (!audio) return;
 
     if (!currentTrack && queue.length > 0) {
-      await unlockAudioOnUserGesture();
+      void unlockAudioOnUserGesture();
       await playTrackAtIndex(0);
       return;
     }
@@ -1241,17 +1288,19 @@ export default function AudioPlayerPage() {
 
     if (audio.paused) {
       if (!audio.src || audio.src === SILENT_AUDIO_URI) {
-        await unlockAudioOnUserGesture();
+        void unlockAudioOnUserGesture();
         await playTrackAtIndex(currentIndex);
         return;
       }
       try {
-        await audio.play();
         setIsPlaying(true);
+        audioUnlockedRef.current = true;
+        await audio.play();
         if ('mediaSession' in navigator) {
           navigator.mediaSession.playbackState = 'playing';
         }
       } catch {
+        setIsPlaying(false);
         await playTrackAtIndex(currentIndex);
       }
     } else {
@@ -1289,7 +1338,7 @@ export default function AudioPlayerPage() {
   };
 
   const playFromSavedTrack = async (track: TrackData, playNow: boolean) => {
-    await unlockAudioOnUserGesture();
+    void unlockAudioOnUserGesture();
 
     if (playNow || queue.length === 0) {
       const existingIdx = queue.findIndex((t) => t.id === track.id);
