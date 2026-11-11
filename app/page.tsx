@@ -13,14 +13,12 @@ import {
   Music2,
   Link2,
   AlertCircle,
-  Smartphone,
   Plus,
   ListMusic,
   History,
   FolderPlus,
   Trash2,
   Timer,
-  Volume2,
   Check,
   Sparkles,
   ListPlus,
@@ -29,13 +27,16 @@ import {
   ClipboardPaste,
   AudioLines,
   Clock,
+  Settings,
+  Repeat2,
 } from 'lucide-react';
 import { AppleSpinner } from './components/AppleSpinner';
 import { CircularTimerModal } from './components/CircularTimerModal';
 import { Snowfall } from './components/Snowfall';
+import { WaveformVisualizer } from './components/WaveformVisualizer';
+import { SettingsModal } from './components/SettingsModal';
 
-// File WAV câm siêu nhẹ (44 bytes) dạng Base64 dùng để "Mở khóa" (Unlock) thẻ <audio>
-// ngay tại thời điểm người dùng chạm nút trên iOS Safari trước khi await fetch() hoàn tất.
+// File WAV câm siêu nhẹ (44 bytes) dùng mở khóa thẻ <audio> trên iOS Safari trước khi fetch()
 const SILENT_AUDIO_URI =
   'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA';
 
@@ -67,19 +68,19 @@ const STORAGE_KEYS = {
   HISTORY: 'ios_audio_history_v1',
   PLAYLISTS: 'ios_audio_playlists_v1',
   QUEUE: 'ios_audio_queue_v1',
+  LOCK_MODE: 'ios_audio_lock_mode_v1',
 };
 
 export default function AudioPlayerPage() {
-  // Input & popup dán nhanh + Loading
+  // Input & modals
   const [inputUrl, setInputUrl] = useState('');
   const [pendingUrl, setPendingUrl] = useState('');
   const [showLinkActionModal, setShowLinkActionModal] = useState(false);
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [showClockModal, setShowClockModal] = useState(false);
   const [loadingMode, setLoadingMode] = useState<'play' | 'queue' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
-
-  // Popup đồng hồ đếm ngược 1-60 phút
-  const [showClockModal, setShowClockModal] = useState(false);
 
   // Danh sách hàng đợi (Queue) & bài hiện tại
   const [queue, setQueue] = useState<TrackData[]>([]);
@@ -97,14 +98,15 @@ export default function AudioPlayerPage() {
   const [selectedPlaylistId, setSelectedPlaylistId] = useState<string | null>(null);
   const [trackToAddPlaylist, setTrackToAddPlaylist] = useState<TrackData | null>(null);
 
-  // Trạng thái trình phát nhạc
+  // Trạng thái trình phát nhạc + Chế độ lặp Bài & lặp Playlist
   const [isPlaying, setIsPlaying] = useState(false);
-  const [repeatMode, setRepeatMode] = useState<RepeatMode>('off');
+  const [trackRepeatMode, setTrackRepeatMode] = useState<RepeatMode>('off');
+  const [playlistRepeatMode, setPlaylistRepeatMode] = useState<RepeatMode>('off');
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [volume, setVolume] = useState(1);
 
-  // Chế độ nút trên Dynamic Island / Lock Screen ('track' = Tiến/Lùi bài | 'seek' = Tua ±5s)
+  // Chế độ nút trên Dynamic Island / Lock Screen (nằm trong Cài đặt)
   const [lockScreenControlMode, setLockScreenControlMode] = useState<'track' | 'seek'>('track');
 
   // Hẹn giờ tắt nhạc (Sleep Timer) & Fade-out
@@ -112,13 +114,15 @@ export default function AudioPlayerPage() {
   const [sleepRemainingSec, setSleepRemainingSec] = useState<number | null>(null);
   const [isFadingOut, setIsFadingOut] = useState(false);
 
-  // Refs
+  // Refs tránh stale closure cho sự kiện <audio> & MediaSession
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const popupInputRef = useRef<HTMLInputElement | null>(null);
   const queueRef = useRef<TrackData[]>(queue);
   const currentIndexRef = useRef<number>(currentIndex);
-  const repeatModeRef = useRef<RepeatMode>(repeatMode);
-  const repeatOnceCountRef = useRef<number>(0);
+  const trackRepeatModeRef = useRef<RepeatMode>(trackRepeatMode);
+  const playlistRepeatModeRef = useRef<RepeatMode>(playlistRepeatMode);
+  const trackRepeatOnceCountRef = useRef<number>(0);
+  const playlistRepeatOnceCountRef = useRef<number>(0);
   const sleepEndTimeRef = useRef<number | null>(null);
   const userBaseVolumeRef = useRef<number>(1);
   const prefetchingTrackIdRef = useRef<string | null>(null);
@@ -132,8 +136,12 @@ export default function AudioPlayerPage() {
   }, [currentIndex]);
 
   useEffect(() => {
-    repeatModeRef.current = repeatMode;
-  }, [repeatMode]);
+    trackRepeatModeRef.current = trackRepeatMode;
+  }, [trackRepeatMode]);
+
+  useEffect(() => {
+    playlistRepeatModeRef.current = playlistRepeatMode;
+  }, [playlistRepeatMode]);
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
@@ -173,10 +181,27 @@ export default function AudioPlayerPage() {
           setCurrentIndex(0);
         }
       }
+
+      const savedLockMode = localStorage.getItem(STORAGE_KEYS.LOCK_MODE);
+      if (savedLockMode === 'track' || savedLockMode === 'seek') {
+        setLockScreenControlMode(savedLockMode);
+      }
     } catch (e) {
       console.error('Lỗi đọc localStorage:', e);
     }
   }, []);
+
+  const handleChangeLockScreenMode = (mode: 'track' | 'seek') => {
+    setLockScreenControlMode(mode);
+    try {
+      localStorage.setItem(STORAGE_KEYS.LOCK_MODE, mode);
+    } catch {}
+    showToast(
+      mode === 'track'
+        ? 'Dynamic Island: Tiến / Lùi bài hát'
+        : 'Dynamic Island: Tua ±5 giây'
+    );
+  };
 
   const addToHistory = useCallback((track: TrackData) => {
     setHistory((prev) => {
@@ -291,7 +316,7 @@ export default function AudioPlayerPage() {
       setError(null);
       setCurrentIndex(index);
       currentIndexRef.current = index;
-      repeatOnceCountRef.current = 0;
+      trackRepeatOnceCountRef.current = 0;
 
       let targetTrack = targetQueue[index];
 
@@ -452,57 +477,94 @@ export default function AudioPlayerPage() {
     updateMediaSessionPosition,
   ]);
 
+  /**
+   * Xử lý khi hết 1 bài:
+   * 1. Lặp bài đơn (1 lần / vô tận)
+   * 2. Chuyển bài tiếp theo trong hàng đợi / playlist
+   * 3. Khi hết bài cuối cùng -> Kiểm tra Lặp Playlist (1 lần / vĩnh viễn / tắt)
+   */
   const handleAudioEnded = useCallback(async () => {
     const audio = audioRef.current;
     if (!audio) return;
 
-    const mode = repeatModeRef.current;
-
-    if (mode === 'infinite') {
+    const tMode = trackRepeatModeRef.current;
+    if (tMode === 'infinite') {
       audio.currentTime = 0;
       await audio.play().catch(() => {});
       return;
     }
 
-    if (mode === 'once' && repeatOnceCountRef.current < 1) {
-      repeatOnceCountRef.current += 1;
+    if (tMode === 'once' && trackRepeatOnceCountRef.current < 1) {
+      trackRepeatOnceCountRef.current += 1;
       audio.currentTime = 0;
       await audio.play().catch(() => {});
       return;
     }
 
-    repeatOnceCountRef.current = 0;
+    trackRepeatOnceCountRef.current = 0;
 
     const q = queueRef.current;
     const idx = currentIndexRef.current;
+
     if (idx + 1 < q.length) {
       playTrackAtIndex(idx + 1);
-    } else {
-      setIsPlaying(false);
-      if ('mediaSession' in navigator) {
-        navigator.mediaSession.playbackState = 'paused';
-      }
+      return;
+    }
+
+    // Đã tới cuối danh sách / playlist -> kiểm tra chế độ lặp Playlist
+    const pMode = playlistRepeatModeRef.current;
+    if (pMode === 'infinite' && q.length > 0) {
+      playTrackAtIndex(0);
+      return;
+    }
+
+    if (pMode === 'once' && playlistRepeatOnceCountRef.current < 1 && q.length > 0) {
+      playlistRepeatOnceCountRef.current += 1;
+      playTrackAtIndex(0);
+      return;
+    }
+
+    playlistRepeatOnceCountRef.current = 0;
+    setIsPlaying(false);
+    if ('mediaSession' in navigator) {
+      navigator.mediaSession.playbackState = 'paused';
     }
   }, [playTrackAtIndex]);
 
   useEffect(() => {
     if (audioRef.current) {
-      audioRef.current.loop = repeatMode === 'infinite';
+      audioRef.current.loop = trackRepeatMode === 'infinite';
     }
-  }, [repeatMode]);
+  }, [trackRepeatMode]);
 
-  const cycleRepeatMode = () => {
-    setRepeatMode((prev) => {
+  const cycleTrackRepeatMode = () => {
+    setTrackRepeatMode((prev) => {
       if (prev === 'off') {
-        repeatOnceCountRef.current = 0;
-        showToast('Phát lặp 1 lần');
+        trackRepeatOnceCountRef.current = 0;
+        showToast('Lặp bài: 1 lần');
         return 'once';
       }
       if (prev === 'once') {
-        showToast('Phát lặp vĩnh viễn ∞');
+        showToast('Lặp bài: Vĩnh viễn ∞');
         return 'infinite';
       }
-      showToast('Đã tắt phát lặp');
+      showToast('Lặp bài: Tắt');
+      return 'off';
+    });
+  };
+
+  const cyclePlaylistRepeatMode = () => {
+    setPlaylistRepeatMode((prev) => {
+      playlistRepeatOnceCountRef.current = 0;
+      if (prev === 'off') {
+        showToast('Lặp Playlist: 1 lần');
+        return 'once';
+      }
+      if (prev === 'once') {
+        showToast('Lặp Playlist: Vĩnh viễn ∞');
+        return 'infinite';
+      }
+      showToast('Lặp Playlist: Tắt');
       return 'off';
     });
   };
@@ -603,10 +665,6 @@ export default function AudioPlayerPage() {
     }
   }, [ensureValidAudioUrl]);
 
-  /**
-   * Khi dán trực tiếp vào ô nhập trên iPhone/máy tính -> tự điền link, hạ bàn phím
-   * và mở thẳng popup chọn Phát ngay | Tiếp theo.
-   */
   const handleManualInputPaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
     const pasted = e.clipboardData.getData('text')?.trim();
     if (pasted) {
@@ -623,11 +681,10 @@ export default function AudioPlayerPage() {
     setError(null);
 
     if (!finalUrl) {
-      setError('Vui lòng dán link TikTok hoặc YouTube vào ô bên trên.');
+      setError('Vui lòng dán link TikTok, YouTube hoặc SoundCloud vào ô bên trên.');
       return;
     }
 
-    // Đóng popup chọn & mở khóa AudioContext iOS ngay trong luồng chạm đồng bộ
     setShowLinkActionModal(false);
     await unlockAudioOnUserGesture();
     setLoadingMode(mode);
@@ -704,8 +761,7 @@ export default function AudioPlayerPage() {
     updateMediaSessionPosition();
   };
 
-  const handleVolumeSlider = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = parseFloat(e.target.value);
+  const handleVolumeChange = (val: number) => {
     setVolume(val);
     userBaseVolumeRef.current = val;
     if (audioRef.current) {
@@ -794,6 +850,7 @@ export default function AudioPlayerPage() {
       return;
     }
     await unlockAudioOnUserGesture();
+    playlistRepeatOnceCountRef.current = 0;
     setQueue(playlist.tracks);
     queueRef.current = playlist.tracks;
     setActiveTab('queue');
@@ -801,36 +858,80 @@ export default function AudioPlayerPage() {
     showToast(`Phát playlist: ${playlist.name}`);
   };
 
+  // Xuất / Nhập Backup JSON cho tính năng chuyển trình duyệt không mất bài
+  const handleExportBackup = () => {
+    const payload = {
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      playlists,
+      history,
+      queue,
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+      type: 'application/json',
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `liquidaudio-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast('Đã xuất file Backup dữ liệu');
+  };
+
+  const handleImportBackup = async (file: File) => {
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      if (Array.isArray(parsed.playlists)) {
+        savePlaylists(parsed.playlists);
+        if (parsed.playlists[0]) setSelectedPlaylistId(parsed.playlists[0].id);
+      }
+      if (Array.isArray(parsed.history)) {
+        setHistory(parsed.history);
+        localStorage.setItem(STORAGE_KEYS.HISTORY, JSON.stringify(parsed.history));
+      }
+      if (Array.isArray(parsed.queue) && parsed.queue.length > 0) {
+        setQueue(parsed.queue);
+        setCurrentIndex(0);
+      }
+      showToast('Đã khôi phục toàn bộ bài hát & playlist!');
+      setShowSettingsModal(false);
+    } catch {
+      setError('File Backup không hợp lệ.');
+    }
+  };
+
   const selectedPlaylist = playlists.find((p) => p.id === selectedPlaylistId) || playlists[0];
   const progressPct = duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0;
-  const volumePct = Math.round(volume * 100);
   const isCustomSleepTime =
     sleepTimerMinutes !== null && ![15, 30, 45].includes(sleepTimerMinutes);
-  const detectedLinkSource = /tiktok\.com/i.test(pendingUrl)
+
+  const detectedLinkSource = /tiktok\.com/i.test(pendingUrl || inputUrl)
     ? 'TikTok'
-    : /(soundcloud\.com|soundcloud\.app\.goo\.gl)/i.test(pendingUrl)
+    : /(soundcloud\.com|soundcloud\.app\.goo\.gl)/i.test(pendingUrl || inputUrl)
     ? 'SoundCloud'
-    : /(youtube\.com|youtu\.be)/i.test(pendingUrl)
+    : /(youtube\.com|youtu\.be)/i.test(pendingUrl || inputUrl)
     ? 'YouTube'
     : null;
 
   return (
     <main className="relative min-h-screen w-full overflow-x-hidden flex flex-col items-center px-4 pt-[max(1rem,env(safe-area-inset-top))] pb-[max(7.5rem,calc(env(safe-area-inset-bottom)+5.5rem))]">
-      {/* NỀN ĐỘNG APPLE LIQUID GLASS */}
-      <div className="fixed inset-0 -z-10 overflow-hidden bg-[#030306]">
-        <div className="animate-orb-slow absolute -top-24 -left-20 w-80 h-80 rounded-full bg-indigo-500/30 blur-[95px]" />
-        <div className="animate-orb-reverse absolute top-1/3 -right-24 w-96 h-96 rounded-full bg-sky-400/20 blur-[110px]" />
-        <div className="animate-orb-slow absolute -bottom-28 left-1/4 w-96 h-96 rounded-full bg-fuchsia-500/20 blur-[115px]" />
+      {/* NỀN NEON LIQUID GLASS (CYAN & MAGENTA GLOW + BLURRED ARTWORK) */}
+      <div className="fixed inset-0 -z-10 overflow-hidden bg-[#05070e]">
+        <div className="animate-orb-slow absolute -top-24 -left-24 w-96 h-96 rounded-full bg-cyan-500/20 blur-[110px]" />
+        <div className="animate-orb-reverse absolute top-1/4 -right-24 w-96 h-96 rounded-full bg-pink-500/20 blur-[115px]" />
+        <div className="animate-orb-slow absolute -bottom-28 left-1/4 w-96 h-96 rounded-full bg-indigo-500/20 blur-[120px]" />
 
         {currentTrack && (
           <img
             src={`/api/image-proxy?url=${encodeURIComponent(currentTrack.thumbnail)}`}
             alt=""
             aria-hidden="true"
-            className="absolute inset-0 w-full h-full object-cover scale-125 blur-[90px] opacity-35 saturate-150 transition-all duration-1000"
+            className="absolute inset-0 w-full h-full object-cover scale-125 blur-[95px] opacity-25 saturate-150 transition-all duration-1000"
           />
         )}
-        <div className="absolute inset-0 bg-gradient-to-b from-black/45 via-black/35 to-black/80" />
+        <div className="absolute inset-0 bg-gradient-to-b from-[#05070e]/55 via-[#05070e]/45 to-[#05070e]/90" />
       </div>
 
       {/* HIỆU ỨNG TUYẾT RƠI NHÈ NHẸ */}
@@ -838,18 +939,18 @@ export default function AudioPlayerPage() {
 
       {/* TOAST NỔI KIỂU DYNAMIC ISLAND */}
       {toast && (
-        <div className="fixed top-[max(1rem,env(safe-area-inset-top))] z-50 px-4 py-2.5 rounded-full bg-black/85 backdrop-blur-2xl border border-white/20 shadow-[0_12px_36px_rgba(0,0,0,0.65)] text-white text-sm font-medium flex items-center gap-2 transition-all">
-          <span className="w-4 h-4 rounded-full bg-white/15 flex items-center justify-center">
-            <Check className="w-3 h-3 text-emerald-300" />
+        <div className="fixed top-[max(1rem,env(safe-area-inset-top))] z-50 px-4 py-2.5 rounded-full bg-black/85 backdrop-blur-2xl border border-cyan-300/30 shadow-[0_12px_36px_rgba(0,0,0,0.65)] text-white text-sm font-medium flex items-center gap-2 transition-all">
+          <span className="w-4 h-4 rounded-full bg-cyan-400/20 flex items-center justify-center">
+            <Check className="w-3 h-3 text-cyan-300" />
           </span>
           <span>{toast}</span>
         </div>
       )}
 
-      {/* POPUP LOADING QUAY VÒNG KIỂU APPLE HUD (GIỐNG ẢNH THAM CHIẾU) */}
+      {/* POPUP LOADING QUAY VÒNG KIỂU APPLE HUD */}
       {loadingMode !== null && (
-        <div className="fixed inset-0 z-50 bg-black/55 backdrop-blur-md flex items-center justify-center p-6">
-          <div className="liquid-glass rounded-[34px] px-10 py-8 flex flex-col items-center justify-center gap-4 min-w-[210px] shadow-[0_24px_70px_rgba(0,0,0,0.7)]">
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-md flex items-center justify-center p-6">
+          <div className="liquid-glass rounded-[34px] px-10 py-8 flex flex-col items-center justify-center gap-4 min-w-[210px] shadow-[0_24px_70px_rgba(0,0,0,0.75)]">
             <AppleSpinner size={54} className="text-white" />
             <span className="text-base font-semibold tracking-tight text-white/95">
               Loading...
@@ -860,12 +961,12 @@ export default function AudioPlayerPage() {
 
       {/* POPUP 2 Ô TRÁI / PHẢI SAU KHI DÁN LINK (PHÁT NGAY | TIẾP THEO) */}
       {showLinkActionModal && (
-        <div className="fixed inset-0 z-50 bg-black/65 backdrop-blur-md flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-md flex items-center justify-center p-4">
           <div className="liquid-glass w-full max-w-sm rounded-[34px] p-5 space-y-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2.5">
-                <div className="w-9 h-9 rounded-full bg-white/15 border border-white/20 flex items-center justify-center">
-                  <ClipboardPaste className="w-4 h-4 text-white" />
+                <div className="w-9 h-9 rounded-full bg-cyan-400/15 border border-cyan-300/30 flex items-center justify-center">
+                  <ClipboardPaste className="w-4 h-4 text-cyan-300" />
                 </div>
                 <div>
                   <h3 className="text-base font-semibold text-white">
@@ -887,9 +988,8 @@ export default function AudioPlayerPage() {
               </button>
             </div>
 
-            {/* Ô link (cho phép dán trực tiếp nếu Safari chưa đọc tự động) */}
             <div className="relative flex items-center">
-              <Link2 className="w-4 h-4 text-white/45 absolute left-3.5 pointer-events-none" />
+              <Link2 className="w-4 h-4 text-cyan-300/70 absolute left-3.5 pointer-events-none" />
               <input
                 ref={popupInputRef}
                 type="url"
@@ -899,7 +999,7 @@ export default function AudioPlayerPage() {
                   setInputUrl(e.target.value);
                 }}
                 placeholder="Chạm giữ để Dán link TikTok / YouTube / SoundCloud..."
-                className="w-full pl-10 pr-9 py-3 text-[15px] bg-black/35 border border-white/20 rounded-2xl text-white placeholder-white/45 focus:outline-none focus:border-white/50"
+                className="w-full pl-10 pr-9 py-3 text-[15px] bg-black/40 border border-white/15 rounded-2xl text-white placeholder-white/45 focus:outline-none focus:border-cyan-400/60"
               />
               {pendingUrl && (
                 <button
@@ -916,13 +1016,12 @@ export default function AudioPlayerPage() {
               )}
             </div>
 
-            {/* 2 Ô TRÁI VÀ PHẢI: PHÁT NGAY | TIẾP THEO */}
             <div className="grid grid-cols-2 gap-3 pt-1">
               <button
                 type="button"
                 disabled={!pendingUrl.trim()}
                 onClick={() => handleExtractUrl('play', pendingUrl)}
-                className="liquid-orb-primary py-4 px-3 rounded-2xl font-semibold text-sm text-zinc-950 flex flex-col items-center justify-center gap-1.5 disabled:opacity-45 active:scale-[0.96] transition"
+                className="neon-orb-primary py-4 px-3 rounded-2xl font-semibold text-sm text-white flex flex-col items-center justify-center gap-1.5 disabled:opacity-45 active:scale-[0.96] transition"
               >
                 <Play className="w-5 h-5 fill-current" />
                 <span>Phát ngay</span>
@@ -934,13 +1033,26 @@ export default function AudioPlayerPage() {
                 onClick={() => handleExtractUrl('queue', pendingUrl)}
                 className="liquid-btn py-4 px-3 rounded-2xl font-semibold text-sm text-white flex flex-col items-center justify-center gap-1.5 disabled:opacity-45"
               >
-                <ListPlus className="w-5 h-5 text-white" />
+                <ListPlus className="w-5 h-5 text-cyan-300" />
                 <span>Tiếp theo</span>
               </button>
             </div>
           </div>
         </div>
       )}
+
+      {/* POPUP CÀI ĐẶT (BÁNH RĂNG GÓC PHẢI TRÊN CÙNG) */}
+      <SettingsModal
+        isOpen={showSettingsModal}
+        onClose={() => setShowSettingsModal(false)}
+        lockScreenControlMode={lockScreenControlMode}
+        onChangeLockScreenMode={handleChangeLockScreenMode}
+        volume={volume}
+        onChangeVolume={handleVolumeChange}
+        onExportBackup={handleExportBackup}
+        onImportBackup={handleImportBackup}
+        savedCount={{ playlists: playlists.length, history: history.length }}
+      />
 
       {/* POPUP ĐỒNG HỒ ĐẾM NGƯỢC 1 TIẾNG (DI TAY KÉO 1-60 PHÚT) */}
       <CircularTimerModal
@@ -957,9 +1069,9 @@ export default function AudioPlayerPage() {
         }}
       />
 
-      {/* MODAL KÍNH LỎNG CHỌN PLAYLIST */}
+      {/* MODAL CHỌN PLAYLIST */}
       {trackToAddPlaylist && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-md flex items-end sm:items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 bg-black/65 backdrop-blur-md flex items-end sm:items-center justify-center p-4">
           <div className="liquid-glass w-full max-w-sm rounded-[32px] p-5 space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="text-base font-semibold tracking-tight text-white">
@@ -981,7 +1093,7 @@ export default function AudioPlayerPage() {
                   className="liquid-btn w-full flex items-center justify-between px-4 py-3.5 rounded-2xl text-left hover:bg-white/15"
                 >
                   <span className="text-sm font-medium text-white">{pl.name}</span>
-                  <span className="text-xs text-white/60 tabular-nums">
+                  <span className="text-xs text-cyan-300 tabular-nums">
                     {pl.tracks.length} bài
                   </span>
                 </button>
@@ -991,37 +1103,38 @@ export default function AudioPlayerPage() {
         </div>
       )}
 
-      <div className="relative z-10 w-full max-w-md space-y-4 my-2">
-        {/* THANH TIÊU ĐỀ DYNAMIC PILL */}
+      <div className="relative z-10 w-full max-w-md space-y-4 my-1">
+        {/* THANH TIÊU ĐỀ + NÚT BÁNH RĂNG CÀI ĐẶT GÓC PHẢI TRÊN CÙNG */}
         <header className="flex items-center justify-between px-1">
-          <div className="liquid-pill px-4 py-2 rounded-full flex items-center gap-2.5">
-            <div className="w-7 h-7 rounded-full bg-white/20 flex items-center justify-center">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-full neon-orb-primary flex items-center justify-center">
               {isPlaying ? (
                 <AudioLines className="w-4 h-4 text-white animate-pulse" />
               ) : (
                 <Music2 className="w-4 h-4 text-white" />
               )}
             </div>
-            <span className="text-sm font-semibold tracking-tight text-white">
+            <span className="text-lg font-bold tracking-tight text-white">
               LiquidAudio
             </span>
           </div>
 
-          <div className="liquid-pill px-3.5 py-2 rounded-full flex items-center gap-2 text-xs font-medium text-white/85">
-            <span
-              className={`w-2 h-2 rounded-full ${
-                isPlaying ? 'bg-emerald-400 shadow-[0_0_8px_#34d399]' : 'bg-white/45'
-              }`}
-            />
-            <span>{isPlaying ? 'Đang chạy nền' : 'iOS Safari Ready'}</span>
-          </div>
+          <button
+            type="button"
+            onClick={() => setShowSettingsModal(true)}
+            className="liquid-pill px-3.5 py-2 rounded-full flex items-center gap-2 text-xs font-semibold text-white/90 hover:text-white active:scale-95 transition"
+          >
+            <Settings className="w-4 h-4 text-cyan-300" />
+            <span>Cài đặt</span>
+          </button>
         </header>
 
-        {/* KHỐI 1: 1 Ô NHẬP LINK LIQUID GLASS + 2 NÚT PHÁT NGAY / TIẾP THEO */}
-        <section className="liquid-glass rounded-[32px] p-4 space-y-3">
-          {/* 1 ô nhập link gọn (dán vào là tự bật popup chọn hoặc bấm 2 nút bên dưới) */}
-          <div className="relative flex items-center">
-            <Link2 className="w-4 h-4 text-white/50 absolute left-4 pointer-events-none" />
+        {/* KHỐI 1: Ô DÁN LINK KIỂU VIBECONVERT + NÚT GRADIENT CYAN->PINK */}
+        <section className="liquid-glass rounded-3xl p-3.5 space-y-3">
+          <div className="flex items-center gap-2 bg-white/5 border border-white/10 rounded-2xl px-3 py-1.5 shadow-inner">
+            <div className="w-8 h-8 rounded-xl bg-white/10 flex items-center justify-center shrink-0">
+              <Link2 className="w-4 h-4 text-cyan-300" />
+            </div>
             <input
               type="url"
               value={inputUrl}
@@ -1036,16 +1149,16 @@ export default function AudioPlayerPage() {
                 }
               }}
               placeholder="Dán link TikTok, YouTube, SoundCloud..."
-              className="w-full pl-11 pr-10 py-3.5 text-[15px] bg-black/30 border border-white/18 rounded-2xl text-white placeholder-white/50 focus:outline-none focus:border-white/50 focus:bg-black/40 transition"
+              className="w-full py-2 text-[15px] bg-transparent text-white placeholder-white/45 focus:outline-none"
             />
             {inputUrl && (
               <button
                 type="button"
                 onClick={() => setInputUrl('')}
-                className="absolute right-3 p-1.5 rounded-full text-white/50 hover:text-white transition"
-                title="Xóa đường dẫn"
+                className="px-2.5 py-1.5 rounded-xl bg-white/10 text-cyan-300 text-xs font-medium hover:bg-white/15 shrink-0"
+                title="Xóa"
               >
-                <X className="w-4 h-4" />
+                Xóa
               </button>
             )}
           </div>
@@ -1055,7 +1168,7 @@ export default function AudioPlayerPage() {
               type="button"
               disabled={loadingMode !== null}
               onClick={() => handleExtractUrl('play', inputUrl)}
-              className="liquid-orb-primary py-3.5 px-4 rounded-2xl font-semibold text-sm text-zinc-950 transition flex items-center justify-center gap-2 disabled:opacity-60 active:scale-[0.97]"
+              className="neon-orb-primary py-3 px-4 rounded-2xl font-semibold text-sm text-white transition flex items-center justify-center gap-2 disabled:opacity-60 active:scale-[0.97]"
             >
               <Play className="w-4 h-4 fill-current" />
               <span>Phát ngay</span>
@@ -1065,106 +1178,85 @@ export default function AudioPlayerPage() {
               type="button"
               disabled={loadingMode !== null}
               onClick={() => handleExtractUrl('queue', inputUrl)}
-              className="liquid-btn py-3.5 px-4 rounded-2xl font-semibold text-sm text-white flex items-center justify-center gap-2 disabled:opacity-60"
+              className="liquid-btn py-3 px-4 rounded-2xl font-semibold text-sm text-cyan-200 flex items-center justify-center gap-2 disabled:opacity-60"
             >
-              <ListPlus className="w-4 h-4 text-white/90" />
+              <ListPlus className="w-4 h-4 text-cyan-300" />
               <span>+ Tiếp theo</span>
             </button>
           </div>
 
           {error && (
-            <div className="p-3.5 rounded-2xl bg-rose-500/20 border border-rose-300/30 text-rose-100 text-sm flex items-start gap-2.5 backdrop-blur-xl">
+            <div className="p-3 rounded-2xl bg-rose-500/20 border border-rose-300/30 text-rose-100 text-sm flex items-start gap-2 backdrop-blur-xl">
               <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-rose-300" />
               <span>{error}</span>
             </div>
           )}
         </section>
 
-        {/* KHỐI 2: TRÌNH PHÁT NHẠC APPLE LIQUID GLASS (NOW PLAYING) */}
+        {/* KHỐI 2: NOW PLAYING CARD (SÓNG ÂM + ẢNH TRÒN Ở GIỮA + ĐIỀU KHIỂN NEON) */}
         {currentTrack && (
-          <section className="liquid-glass rounded-[34px] p-5 space-y-5">
-            {/* Ảnh bìa + Tên bài phong cách Apple Music */}
-            <div className="flex items-center gap-4">
-              <div className="relative shrink-0">
-                <img
-                  src={`/api/image-proxy?url=${encodeURIComponent(currentTrack.thumbnail)}`}
-                  alt={currentTrack.title}
-                  className={`w-20 h-20 rounded-[22px] object-cover bg-white/10 border border-white/25 shadow-[0_14px_30px_rgba(0,0,0,0.45)] transition-transform duration-500 ${
-                    isPlaying ? 'scale-100' : 'scale-[0.92] opacity-85'
-                  }`}
-                />
-                <span className="absolute -bottom-1.5 -right-1.5 px-2.5 py-0.5 rounded-full bg-black/80 backdrop-blur-md border border-white/25 text-[10px] font-bold uppercase tracking-wider text-white">
-                  {currentTrack.source === 'tiktok'
-                    ? 'TikTok'
-                    : currentTrack.source === 'soundcloud'
-                    ? 'SoundCloud'
-                    : 'YouTube'}
-                </span>
-              </div>
-
-              <div className="min-w-0 flex-1 space-y-1">
-                <div className="flex items-center gap-1.5 flex-wrap">
-                  <span className="px-2.5 py-0.5 rounded-full bg-white/12 border border-white/15 text-xs font-medium text-white/90 tabular-nums">
-                    {currentIndex + 1} / {queue.length}
+          <section className="liquid-glass rounded-3xl p-5 space-y-4">
+            {/* Header Now Playing */}
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0 flex-1 space-y-0.5">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-cyan-300/90">
+                    NOW PLAYING
                   </span>
-                  {repeatMode !== 'off' && (
-                    <span className="px-2.5 py-0.5 rounded-full bg-white/22 border border-white/30 text-xs font-semibold text-white">
-                      {repeatMode === 'once' ? 'Lặp 1 lần' : 'Lặp vô tận ∞'}
-                    </span>
-                  )}
+                  <span className="px-2 py-0.5 rounded-full bg-white/10 text-[11px] font-medium text-white/80 tabular-nums">
+                    {currentIndex + 1}/{queue.length}
+                  </span>
+                  <span className="px-2 py-0.5 rounded-full bg-cyan-400/15 border border-cyan-300/25 text-[10px] font-bold uppercase text-cyan-200">
+                    {currentTrack.source === 'tiktok'
+                      ? 'TikTok'
+                      : currentTrack.source === 'soundcloud'
+                      ? 'SoundCloud'
+                      : 'YouTube'}
+                  </span>
                 </div>
 
-                <h2 className="text-base sm:text-lg font-semibold tracking-tight text-white truncate">
+                <h2 className="text-lg font-bold tracking-tight text-white truncate pt-0.5">
                   {currentTrack.title}
                 </h2>
-                <p className="text-sm text-white/70 truncate">{currentTrack.author}</p>
+                <p className="text-sm text-white/65 truncate">{currentTrack.author}</p>
               </div>
 
               <button
                 type="button"
                 onClick={() => setTrackToAddPlaylist(currentTrack)}
-                title="Lưu bài này vào Playlist"
-                className="liquid-btn w-10 h-10 rounded-full flex items-center justify-center text-white/85 hover:text-white shrink-0"
+                title="Lưu bài vào Playlist"
+                className="liquid-btn w-10 h-10 rounded-full flex items-center justify-center text-white/85 hover:text-cyan-300 shrink-0"
               >
                 <FolderPlus className="w-4 h-4" />
               </button>
             </div>
 
-            {/* Thanh tiến trình kiểu Apple Music */}
-            <div className="space-y-1.5">
-              <input
-                type="range"
-                min={0}
-                max={duration || 100}
-                step={0.1}
-                value={currentTime}
-                onChange={handleSeekSlider}
-                style={{
-                  background: `linear-gradient(to right, rgba(255,255,255,0.95) ${progressPct}%, rgba(255,255,255,0.2) ${progressPct}%)`,
-                }}
-                className="apple-slider w-full"
-              />
-              <div className="flex justify-between text-xs font-medium text-white/65 tabular-nums">
-                <span>{formatTime(currentTime)}</span>
-                <span>-{formatTime(Math.max(0, (duration || 0) - currentTime))}</span>
+            {/* Sóng âm Cyan -> Pink + Ảnh đại diện tròn ở giữa giống ảnh gợi ý */}
+            <div className="flex flex-col items-center justify-center gap-3 py-1">
+              <WaveformVisualizer isPlaying={isPlaying} />
+
+              <div className="relative">
+                <div
+                  className={`absolute -inset-2 rounded-full bg-gradient-to-tr from-cyan-400/35 via-indigo-400/25 to-pink-500/35 blur-md transition-opacity duration-500 ${
+                    isPlaying ? 'opacity-100' : 'opacity-40'
+                  }`}
+                />
+                <img
+                  src={`/api/image-proxy?url=${encodeURIComponent(currentTrack.thumbnail)}`}
+                  alt={currentTrack.title}
+                  className={`relative w-24 h-24 rounded-full object-cover border-[3px] border-cyan-400/60 shadow-inner transition-transform duration-500 ${
+                    isPlaying ? 'scale-100' : 'scale-95 opacity-90'
+                  }`}
+                />
               </div>
             </div>
 
-            {/* Bộ nút điều khiển chính: Lùi bài | -5s | Play/Pause | +5s | Tiến bài */}
-            <div className="flex items-center justify-between gap-1">
-              <button
-                type="button"
-                onClick={handlePrevTrack}
-                className="liquid-btn w-11 h-11 rounded-full flex items-center justify-center text-white/90"
-                title="Bài trước"
-              >
-                <SkipBack className="w-4 h-4 fill-current" />
-              </button>
-
+            {/* Bộ nút điều khiển trung tâm: -5s | << | Play/Pause Orb | >> | +5s */}
+            <div className="flex items-center justify-between gap-1 pt-1">
               <button
                 type="button"
                 onClick={() => seekRelative(-5)}
-                className="liquid-btn px-3.5 h-11 rounded-full flex items-center gap-1.5 text-white/90"
+                className="liquid-btn px-3 h-10 rounded-full flex items-center gap-1 text-white/85 hover:text-cyan-300"
                 title="Tua lùi 5 giây"
               >
                 <RotateCcw className="w-4 h-4" />
@@ -1173,8 +1265,17 @@ export default function AudioPlayerPage() {
 
               <button
                 type="button"
+                onClick={handlePrevTrack}
+                className="liquid-btn w-11 h-11 rounded-full flex items-center justify-center text-white/90 hover:text-white"
+                title="Bài trước"
+              >
+                <SkipBack className="w-5 h-5 fill-current" />
+              </button>
+
+              <button
+                type="button"
                 onClick={togglePlayPause}
-                className="liquid-orb-primary w-16 h-16 rounded-full text-zinc-950 flex items-center justify-center transition active:scale-95"
+                className="neon-orb-primary w-16 h-16 rounded-full text-white flex items-center justify-center transition active:scale-95"
               >
                 {isPlaying ? (
                   <Pause className="w-7 h-7 fill-current" />
@@ -1185,75 +1286,98 @@ export default function AudioPlayerPage() {
 
               <button
                 type="button"
+                onClick={handleNextTrack}
+                className="liquid-btn w-11 h-11 rounded-full flex items-center justify-center text-white/90 hover:text-white"
+                title="Bài tiếp theo"
+              >
+                <SkipForward className="w-5 h-5 fill-current" />
+              </button>
+
+              <button
+                type="button"
                 onClick={() => seekRelative(5)}
-                className="liquid-btn px-3.5 h-11 rounded-full flex items-center gap-1.5 text-white/90"
+                className="liquid-btn px-3 h-10 rounded-full flex items-center gap-1 text-white/85 hover:text-pink-300"
                 title="Tua tiến 5 giây"
               >
                 <span className="text-xs font-semibold tabular-nums">+5s</span>
                 <RotateCw className="w-4 h-4" />
               </button>
-
-              <button
-                type="button"
-                onClick={handleNextTrack}
-                className="liquid-btn w-11 h-11 rounded-full flex items-center justify-center text-white/90"
-                title="Bài tiếp theo"
-              >
-                <SkipForward className="w-4 h-4 fill-current" />
-              </button>
             </div>
 
-            {/* Thanh phụ: Lặp bài + Dynamic Island + Hẹn giờ (15/30/45p + Đồng hồ kéo tay) + Âm lượng */}
-            <div className="pt-3 border-t border-white/12 space-y-3.5">
-              {/* Hàng 1: Chế độ lặp & Nút Dynamic Island */}
-              <div className="flex items-center justify-between gap-2 flex-wrap">
+            {/* Thanh tiến trình Gradient Cyan -> Pink */}
+            <div className="space-y-1.5">
+              <input
+                type="range"
+                min={0}
+                max={duration || 100}
+                step={0.1}
+                value={currentTime}
+                onChange={handleSeekSlider}
+                style={{
+                  background: `linear-gradient(to right, #22d3ee 0%, #ec4899 ${progressPct}%, rgba(255,255,255,0.18) ${progressPct}%)`,
+                }}
+                className="apple-slider w-full"
+              />
+              <div className="flex justify-between text-xs font-medium text-white/65 tabular-nums">
+                <span>{formatTime(currentTime)}</span>
+                <span>{formatTime(duration)}</span>
+              </div>
+            </div>
+
+            {/* HÀNG LẶP BÀI & LẶP PLAYLIST (1 LẦN / VĨNH VIỄN / TẮT) + HẸN GIỜ */}
+            <div className="pt-3 border-t border-white/10 space-y-3">
+              {/* Hàng Lặp 1 bài & Lặp Playlist */}
+              <div className="grid grid-cols-2 gap-2">
                 <button
                   type="button"
-                  onClick={cycleRepeatMode}
-                  className={`px-3.5 py-2 rounded-full text-xs font-medium flex items-center gap-1.5 border transition active:scale-95 ${
-                    repeatMode !== 'off'
-                      ? 'bg-white text-zinc-950 border-white shadow-[0_4px_16px_rgba(255,255,255,0.28)]'
-                      : 'liquid-btn text-white/85'
+                  onClick={cycleTrackRepeatMode}
+                  className={`py-2 px-3 rounded-2xl text-xs font-semibold flex items-center justify-center gap-1.5 border transition active:scale-95 ${
+                    trackRepeatMode !== 'off'
+                      ? 'bg-cyan-400/20 border-cyan-300/50 text-cyan-200'
+                      : 'bg-white/5 border-white/10 text-white/75 hover:text-white'
                   }`}
                 >
-                  {repeatMode === 'once' ? (
+                  {trackRepeatMode === 'once' ? (
                     <Repeat1 className="w-4 h-4" />
                   ) : (
                     <Repeat className="w-4 h-4" />
                   )}
                   <span>
-                    {repeatMode === 'off'
-                      ? 'Tắt lặp'
-                      : repeatMode === 'once'
-                      ? 'Lặp 1 lần'
-                      : 'Lặp vĩnh viễn ∞'}
+                    {trackRepeatMode === 'off'
+                      ? 'Lặp bài: Tắt'
+                      : trackRepeatMode === 'once'
+                      ? 'Lặp bài: 1 lần'
+                      : 'Lặp bài: ∞'}
                   </span>
                 </button>
 
                 <button
                   type="button"
-                  onClick={() =>
-                    setLockScreenControlMode((prev) =>
-                      prev === 'track' ? 'seek' : 'track'
-                    )
-                  }
-                  className="liquid-btn px-3.5 py-2 rounded-full text-xs font-medium text-white/85"
-                  title="Chọn cặp nút hiển thị trên Dynamic Island"
+                  onClick={cyclePlaylistRepeatMode}
+                  className={`py-2 px-3 rounded-2xl text-xs font-semibold flex items-center justify-center gap-1.5 border transition active:scale-95 ${
+                    playlistRepeatMode !== 'off'
+                      ? 'bg-pink-500/20 border-pink-400/50 text-pink-200'
+                      : 'bg-white/5 border-white/10 text-white/75 hover:text-white'
+                  }`}
                 >
-                  Dynamic Island:{' '}
-                  <b className="text-white">
-                    {lockScreenControlMode === 'track' ? 'Tiến/Lùi bài' : 'Tua ±5s'}
-                  </b>
+                  <Repeat2 className="w-4 h-4" />
+                  <span>
+                    {playlistRepeatMode === 'off'
+                      ? 'Lặp Playlist: Tắt'
+                      : playlistRepeatMode === 'once'
+                      ? 'Lặp Playlist: 1 lần'
+                      : 'Lặp Playlist: ∞'}
+                  </span>
                 </button>
               </div>
 
-              {/* Hàng 2: Hẹn giờ 15 / 30 / 45 phút + Nút Đồng hồ kéo tay 1-60p */}
+              {/* Hàng Hẹn giờ 15 / 30 / 45 phút + Đồng hồ 1-60p */}
               <div className="flex items-center justify-between gap-2 flex-wrap">
-                <div className="flex items-center gap-1.5 text-xs text-white/85">
-                  <Timer className="w-4 h-4 text-white/80" />
+                <div className="flex items-center gap-1.5 text-xs text-white/80">
+                  <Timer className="w-4 h-4 text-cyan-300" />
                   <span className="font-medium">Hẹn giờ:</span>
                   {sleepRemainingSec !== null && (
-                    <span className="font-semibold text-emerald-300 tabular-nums">
+                    <span className="font-semibold text-cyan-300 tabular-nums">
                       {formatTime(sleepRemainingSec)}
                       {isFadingOut ? ' • Fade-out' : ''}
                     </span>
@@ -1270,23 +1394,22 @@ export default function AudioPlayerPage() {
                       }
                       className={`px-3 py-1.5 rounded-full text-xs font-semibold transition active:scale-95 ${
                         sleepTimerMinutes === mins
-                          ? 'bg-white text-zinc-950 shadow'
-                          : 'bg-white/10 hover:bg-white/20 border border-white/12 text-white/85'
+                          ? 'neon-orb-primary text-white shadow'
+                          : 'bg-white/8 hover:bg-white/15 border border-white/12 text-white/80'
                       }`}
                     >
                       {mins}p
                     </button>
                   ))}
 
-                  {/* Nút Đồng hồ mở popup vòng quay đếm ngược 1-60 phút */}
                   <button
                     type="button"
                     onClick={() => setShowClockModal(true)}
-                    title="Tùy chỉnh đồng hồ đếm ngược 1–60 phút"
+                    title="Đồng hồ đếm ngược 1–60 phút"
                     className={`px-3 py-1.5 rounded-full text-xs font-semibold flex items-center gap-1 transition active:scale-95 ${
                       isCustomSleepTime
-                        ? 'bg-white text-zinc-950 shadow'
-                        : 'bg-white/14 hover:bg-white/25 border border-white/20 text-white'
+                        ? 'neon-orb-primary text-white shadow'
+                        : 'bg-white/10 hover:bg-white/20 border border-white/15 text-cyan-200'
                     }`}
                   >
                     <Clock className="w-3.5 h-3.5" />
@@ -1297,47 +1420,27 @@ export default function AudioPlayerPage() {
                     <button
                       type="button"
                       onClick={() => startSleepTimer(null)}
-                      className="px-3 py-1.5 rounded-full text-xs font-medium bg-rose-500/25 border border-rose-300/30 text-rose-100"
+                      className="px-3 py-1.5 rounded-full text-xs font-medium bg-rose-500/20 border border-rose-300/30 text-rose-200"
                     >
                       Tắt
                     </button>
                   )}
                 </div>
               </div>
-
-              {/* Hàng 3: Thanh Âm lượng */}
-              <div className="flex items-center gap-2.5">
-                <Volume2 className="w-4 h-4 text-white/65 shrink-0" />
-                <input
-                  type="range"
-                  min={0}
-                  max={1}
-                  step={0.01}
-                  value={volume}
-                  onChange={handleVolumeSlider}
-                  style={{
-                    background: `linear-gradient(to right, rgba(255,255,255,0.9) ${volumePct}%, rgba(255,255,255,0.2) ${volumePct}%)`,
-                  }}
-                  className="apple-slider w-full"
-                />
-                <span className="text-xs font-medium text-white/60 w-9 text-right tabular-nums">
-                  {volumePct}%
-                </span>
-              </div>
             </div>
           </section>
         )}
 
-        {/* KHỐI 3: THƯ VIỆN KÍNH LỎNG (TIẾP THEO • PLAYLIST • ĐÃ NGHE) */}
-        <section className="liquid-glass rounded-[32px] p-4 space-y-3.5">
-          <div className="grid grid-cols-3 gap-1 p-1 rounded-2xl bg-black/30 border border-white/12">
+        {/* KHỐI 3: DANH SÁCH TIẾP THEO • PLAYLIST • ĐÃ NGHE (STYLE RECENTLY TRACKS) */}
+        <section className="liquid-glass rounded-3xl p-4 space-y-3.5">
+          <div className="grid grid-cols-3 gap-1 p-1 rounded-2xl bg-black/35 border border-white/10">
             <button
               type="button"
               onClick={() => setActiveTab('queue')}
               className={`py-2.5 px-2 rounded-xl text-[13px] font-semibold flex items-center justify-center gap-1.5 transition ${
                 activeTab === 'queue'
-                  ? 'bg-white text-zinc-950 shadow-[0_4px_16px_rgba(255,255,255,0.2)]'
-                  : 'text-white/75 hover:text-white'
+                  ? 'neon-orb-primary text-white shadow'
+                  : 'text-white/70 hover:text-white'
               }`}
             >
               <ListMusic className="w-4 h-4" />
@@ -1349,8 +1452,8 @@ export default function AudioPlayerPage() {
               onClick={() => setActiveTab('playlists')}
               className={`py-2.5 px-2 rounded-xl text-[13px] font-semibold flex items-center justify-center gap-1.5 transition ${
                 activeTab === 'playlists'
-                  ? 'bg-white text-zinc-950 shadow-[0_4px_16px_rgba(255,255,255,0.2)]'
-                  : 'text-white/75 hover:text-white'
+                  ? 'neon-orb-primary text-white shadow'
+                  : 'text-white/70 hover:text-white'
               }`}
             >
               <Sparkles className="w-4 h-4" />
@@ -1362,8 +1465,8 @@ export default function AudioPlayerPage() {
               onClick={() => setActiveTab('history')}
               className={`py-2.5 px-2 rounded-xl text-[13px] font-semibold flex items-center justify-center gap-1.5 transition ${
                 activeTab === 'history'
-                  ? 'bg-white text-zinc-950 shadow-[0_4px_16px_rgba(255,255,255,0.2)]'
-                  : 'text-white/75 hover:text-white'
+                  ? 'neon-orb-primary text-white shadow'
+                  : 'text-white/70 hover:text-white'
               }`}
             >
               <History className="w-4 h-4" />
@@ -1375,8 +1478,8 @@ export default function AudioPlayerPage() {
           {activeTab === 'queue' && (
             <div className="space-y-2 max-h-72 overflow-y-auto no-scrollbar">
               {queue.length === 0 ? (
-                <p className="text-center text-sm text-white/55 py-8">
-                  Danh sách phát trống. Hãy dán link ở trên hoặc chọn bài từ Lịch sử!
+                <p className="text-center text-sm text-white/50 py-8">
+                  Danh sách phát trống. Hãy dán link ở trên hoặc chọn bài từ Đã nghe!
                 </p>
               ) : (
                 queue.map((item, idx) => {
@@ -1384,12 +1487,15 @@ export default function AudioPlayerPage() {
                   return (
                     <div
                       key={`${item.id}_${idx}`}
-                      className={`flex items-center gap-3 p-3 rounded-2xl border transition ${
+                      className={`flex items-center gap-3 p-2.5 rounded-2xl border transition ${
                         isCurrent
-                          ? 'bg-white/16 border-white/35 shadow-[inset_0_1px_0_rgba(255,255,255,0.3)]'
-                          : 'bg-black/20 border-white/10 hover:bg-white/8'
+                          ? 'bg-cyan-400/12 border-cyan-300/35'
+                          : 'bg-white/5 border-white/10 hover:bg-white/10'
                       }`}
                     >
+                      <span className="w-5 text-center text-xs font-semibold text-white/50 tabular-nums shrink-0">
+                        {idx + 1}
+                      </span>
                       <button
                         type="button"
                         onClick={() => playTrackAtIndex(idx)}
@@ -1401,13 +1507,14 @@ export default function AudioPlayerPage() {
                           className="w-11 h-11 rounded-xl object-cover bg-white/10 border border-white/15 shrink-0"
                         />
                         <div className="min-w-0 flex-1">
-                          <p className="text-sm font-semibold text-white truncate">
-                            {isCurrent ? '▶ ' : `${idx + 1}. `}
+                          <p
+                            className={`text-sm font-semibold truncate ${
+                              isCurrent ? 'text-cyan-300' : 'text-white'
+                            }`}
+                          >
                             {item.title}
                           </p>
-                          <p className="text-xs text-white/65 truncate">
-                            {item.author}
-                          </p>
+                          <p className="text-xs text-white/60 truncate">{item.author}</p>
                         </div>
                       </button>
 
@@ -1415,7 +1522,7 @@ export default function AudioPlayerPage() {
                         type="button"
                         onClick={() => setTrackToAddPlaylist(item)}
                         title="Lưu vào Playlist"
-                        className="p-2 text-white/60 hover:text-white transition"
+                        className="p-2 text-white/55 hover:text-cyan-300 transition"
                       >
                         <FolderPlus className="w-4 h-4" />
                       </button>
@@ -1436,7 +1543,7 @@ export default function AudioPlayerPage() {
                           }
                         }}
                         title="Xóa khỏi hàng đợi"
-                        className="p-2 text-white/50 hover:text-rose-300 transition"
+                        className="p-2 text-white/45 hover:text-rose-300 transition"
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>
@@ -1456,11 +1563,11 @@ export default function AudioPlayerPage() {
                   value={newPlaylistName}
                   onChange={(e) => setNewPlaylistName(e.target.value)}
                   placeholder="Tên playlist mới (VD: Chill Đêm)..."
-                  className="flex-1 px-4 py-2.5 text-sm bg-black/30 border border-white/15 rounded-2xl text-white placeholder-white/45 focus:outline-none focus:border-white/40"
+                  className="flex-1 px-4 py-2.5 text-sm bg-black/35 border border-white/12 rounded-2xl text-white placeholder-white/45 focus:outline-none focus:border-cyan-400/50"
                 />
                 <button
                   type="submit"
-                  className="liquid-orb-primary px-4 py-2.5 rounded-2xl text-zinc-950 text-sm font-semibold flex items-center gap-1 shrink-0 active:scale-95 transition"
+                  className="neon-orb-primary px-4 py-2.5 rounded-2xl text-white text-sm font-semibold flex items-center gap-1 shrink-0 active:scale-95 transition"
                 >
                   <Plus className="w-4 h-4" />
                   <span>Tạo</span>
@@ -1475,8 +1582,8 @@ export default function AudioPlayerPage() {
                     onClick={() => setSelectedPlaylistId(pl.id)}
                     className={`px-3.5 py-2 rounded-full text-xs font-medium shrink-0 border transition ${
                       selectedPlaylist?.id === pl.id
-                        ? 'bg-white text-zinc-950 border-white shadow'
-                        : 'bg-white/10 border-white/12 text-white/80 hover:text-white'
+                        ? 'bg-cyan-400/20 border-cyan-300/50 text-cyan-200'
+                        : 'bg-white/5 border-white/10 text-white/75 hover:text-white'
                     }`}
                   >
                     {pl.name} ({pl.tracks.length})
@@ -1486,20 +1593,20 @@ export default function AudioPlayerPage() {
 
               {selectedPlaylist && (
                 <div className="space-y-2">
-                  <div className="flex items-center justify-between p-3.5 rounded-2xl bg-black/25 border border-white/12">
+                  <div className="flex items-center justify-between p-3.5 rounded-2xl bg-white/5 border border-white/10">
                     <div>
                       <h3 className="text-sm font-semibold text-white">
                         {selectedPlaylist.name}
                       </h3>
                       <p className="text-xs text-white/60">
-                        {selectedPlaylist.tracks.length} bài • Tự động phát liên tục
+                        {selectedPlaylist.tracks.length} bài • Phát tự động liên tục
                       </p>
                     </div>
                     <div className="flex items-center gap-1.5">
                       <button
                         type="button"
                         onClick={() => playEntirePlaylist(selectedPlaylist, 0)}
-                        className="liquid-orb-primary px-3.5 py-2 rounded-full text-zinc-950 text-xs font-semibold flex items-center gap-1.5 active:scale-95 transition"
+                        className="neon-orb-primary px-3.5 py-2 rounded-full text-white text-xs font-semibold flex items-center gap-1.5 active:scale-95 transition"
                       >
                         <PlayCircle className="w-4 h-4" />
                         <span>Phát tất cả</span>
@@ -1519,15 +1626,18 @@ export default function AudioPlayerPage() {
 
                   <div className="space-y-1.5 max-h-56 overflow-y-auto no-scrollbar">
                     {selectedPlaylist.tracks.length === 0 ? (
-                      <p className="text-center text-sm text-white/55 py-6">
+                      <p className="text-center text-sm text-white/50 py-6">
                         Playlist trống. Bấm biểu tượng thư mục (+) trên bài hát để thêm vào đây!
                       </p>
                     ) : (
                       selectedPlaylist.tracks.map((item, idx) => (
                         <div
                           key={`${item.id}_${idx}`}
-                          className="flex items-center gap-3 p-2.5 rounded-2xl bg-black/20 border border-white/10 hover:bg-white/8 transition"
+                          className="flex items-center gap-3 p-2.5 rounded-2xl bg-white/5 border border-white/10 hover:bg-white/10 transition"
                         >
+                          <span className="w-5 text-center text-xs font-semibold text-white/50 tabular-nums shrink-0">
+                            {idx + 1}
+                          </span>
                           <button
                             type="button"
                             onClick={() => playEntirePlaylist(selectedPlaylist, idx)}
@@ -1542,7 +1652,7 @@ export default function AudioPlayerPage() {
                             />
                             <div className="min-w-0 flex-1">
                               <p className="text-sm font-medium text-white truncate">
-                                {idx + 1}. {item.title}
+                                {item.title}
                               </p>
                               <p className="text-xs text-white/60 truncate">
                                 {item.author}
@@ -1554,7 +1664,7 @@ export default function AudioPlayerPage() {
                             onClick={() =>
                               removeTrackFromPlaylist(selectedPlaylist.id, item.id)
                             }
-                            className="p-2 text-white/50 hover:text-rose-300"
+                            className="p-2 text-white/45 hover:text-rose-300"
                             title="Xóa khỏi Playlist"
                           >
                             <Trash2 className="w-4 h-4" />
@@ -1572,7 +1682,7 @@ export default function AudioPlayerPage() {
           {activeTab === 'history' && (
             <div className="space-y-2 max-h-72 overflow-y-auto no-scrollbar">
               {history.length === 0 ? (
-                <p className="text-center text-sm text-white/55 py-8">
+                <p className="text-center text-sm text-white/50 py-8">
                   Lịch sử trống. Các bài từng nghe sẽ lưu lại tại đây để lần sau ấn vô là phát ngay!
                 </p>
               ) : (
@@ -1588,16 +1698,19 @@ export default function AudioPlayerPage() {
                         localStorage.removeItem(STORAGE_KEYS.HISTORY);
                         showToast('Đã xóa lịch sử');
                       }}
-                      className="text-xs text-white/55 hover:text-rose-300"
+                      className="text-xs text-white/50 hover:text-rose-300"
                     >
                       Xóa tất cả
                     </button>
                   </div>
-                  {history.map((item) => (
+                  {history.map((item, idx) => (
                     <div
                       key={item.id}
-                      className="flex items-center gap-3 p-3 rounded-2xl bg-black/20 border border-white/10 hover:bg-white/10 transition"
+                      className="flex items-center gap-3 p-2.5 rounded-2xl bg-white/5 border border-white/10 hover:bg-white/10 transition"
                     >
+                      <span className="w-5 text-center text-xs font-semibold text-white/50 tabular-nums shrink-0">
+                        {idx + 1}
+                      </span>
                       <button
                         type="button"
                         onClick={() => playFromSavedTrack(item, true)}
@@ -1612,9 +1725,9 @@ export default function AudioPlayerPage() {
                           <p className="text-sm font-semibold text-white truncate">
                             {item.title}
                           </p>
-                          <p className="text-xs text-white/65 truncate">
+                          <p className="text-xs text-white/60 truncate">
                             {item.author} •{' '}
-                            <span className="uppercase text-[10px] text-white/85">
+                            <span className="uppercase text-[10px] text-cyan-300">
                               {item.source}
                             </span>
                           </p>
@@ -1625,7 +1738,7 @@ export default function AudioPlayerPage() {
                         type="button"
                         onClick={() => playFromSavedTrack(item, false)}
                         title="Thêm vào Tiếp theo"
-                        className="liquid-btn p-2 rounded-xl text-white/85"
+                        className="liquid-btn p-2 rounded-full text-cyan-300"
                       >
                         <ListPlus className="w-4 h-4" />
                       </button>
@@ -1634,7 +1747,7 @@ export default function AudioPlayerPage() {
                         type="button"
                         onClick={() => setTrackToAddPlaylist(item)}
                         title="Lưu vào Playlist"
-                        className="liquid-btn p-2 rounded-xl text-white/85"
+                        className="liquid-btn p-2 rounded-full text-pink-300"
                       >
                         <FolderPlus className="w-4 h-4" />
                       </button>
@@ -1645,15 +1758,6 @@ export default function AudioPlayerPage() {
             </div>
           )}
         </section>
-
-        {/* GHI CHÚ DYNAMIC ISLAND */}
-        <footer className="liquid-pill px-4 py-3.5 rounded-[24px] flex items-center gap-3 text-xs leading-relaxed text-white/80">
-          <Smartphone className="w-4 h-4 text-white shrink-0" />
-          <span>
-            <b className="text-white">Dynamic Island &amp; Khóa màn hình:</b> Hiển thị ảnh đại diện,
-            tiến/lùi bài hát và chạy nền liên tục khi tắt màn hình hoặc thoát Safari.
-          </span>
-        </footer>
 
         {/* THẺ <audio> DUY NHẤT CHUẨN iOS SAFARI BACKGROUND PLAYBACK */}
         <audio
