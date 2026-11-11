@@ -18,6 +18,7 @@ import {
   CheckCircle2,
   Lock,
   User,
+  Sparkles,
 } from 'lucide-react';
 
 interface SyncSession {
@@ -42,6 +43,9 @@ interface SettingsModalProps {
   onLoginSync: (username: string, pin: string) => Promise<void>;
   onManualSync: () => Promise<void>;
   onLogoutSync: () => void;
+  // Bật / tắt tính năng Gợi ý bài hát liên quan
+  suggestionsEnabled: boolean;
+  onToggleSuggestions: (enabled: boolean) => void;
 }
 
 /**
@@ -67,6 +71,8 @@ export function SettingsModal({
   onLoginSync,
   onManualSync,
   onLogoutSync,
+  suggestionsEnabled,
+  onToggleSuggestions,
 }: SettingsModalProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [usernameInput, setUsernameInput] = useState('');
@@ -314,6 +320,39 @@ export function SettingsModal({
               <span>Tua ±5 giây</span>
             </button>
           </div>
+        </div>
+
+        {/* 2B. Bật / Tắt tính năng Gợi ý bài hát */}
+        <div className="p-4 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-between gap-3">
+          <div className="space-y-0.5 min-w-0 flex-1">
+            <div className="flex items-center gap-1.5">
+              <Sparkles className="w-4 h-4 text-pink-300 shrink-0" />
+              <span className="text-sm font-semibold text-white">
+                Gợi ý &amp; Tự phát tiếp
+              </span>
+            </div>
+            <p className="text-xs text-white/60 leading-relaxed">
+              Hiện tab Gợi ý (YouTube, SoundCloud, TikTok, Spotify) và tự nối bài khi hết danh sách.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            role="switch"
+            aria-checked={suggestionsEnabled}
+            onClick={() => onToggleSuggestions(!suggestionsEnabled)}
+            className={`relative w-12 h-7 rounded-full transition-colors shrink-0 p-1 ${
+              suggestionsEnabled
+                ? 'bg-gradient-to-r from-cyan-400 to-pink-500 shadow-[0_0_14px_rgba(34,211,238,0.4)]'
+                : 'bg-white/15 border border-white/20'
+            }`}
+          >
+            <span
+              className={`block w-5 h-5 rounded-full bg-white shadow transition-transform ${
+                suggestionsEnabled ? 'translate-x-5' : 'translate-x-0'
+              }`}
+            />
+          </button>
         </div>
 
         {/* 3. Thanh Âm lượng */}

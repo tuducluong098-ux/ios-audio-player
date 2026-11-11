@@ -29,6 +29,8 @@ import {
   Clock,
   Settings,
   Repeat2,
+  Loader2,
+  Compass,
 } from 'lucide-react';
 import Hls from 'hls.js';
 import { AppleSpinner } from './components/AppleSpinner';
@@ -47,6 +49,8 @@ const SOUNDCLOUD_TTL_MS = 4 * 60 * 1000; // SoundCloud signed CloudFront URL h�
 
 export type RepeatMode = 'off' | 'once' | 'infinite';
 
+export type AudioSource = 'youtube' | 'tiktok' | 'soundcloud' | 'spotify';
+
 export interface TrackData {
   id: string;
   originalUrl: string;
@@ -54,9 +58,18 @@ export interface TrackData {
   title: string;
   author: string;
   thumbnail: string;
-  source: 'youtube' | 'tiktok' | 'soundcloud';
+  source: AudioSource;
   mimeType: string;
   extractedAt: number;
+}
+
+export interface SuggestedTrack {
+  id: string;
+  url: string;
+  title: string;
+  author: string;
+  thumbnail: string;
+  source: AudioSource;
 }
 
 export interface Playlist {
@@ -72,6 +85,7 @@ const STORAGE_KEYS = {
   QUEUE: 'ios_audio_queue_v1',
   LOCK_MODE: 'ios_audio_lock_mode_v1',
   SYNC_AUTH: 'ios_audio_sync_auth_v1',
+  SUGGESTIONS_ENABLED: 'ios_audio_suggestions_v1',
 };
 
 interface SyncSession {
@@ -97,10 +111,13 @@ export default function AudioPlayerPage() {
   const currentTrack =
     currentIndex >= 0 && currentIndex < queue.length ? queue[currentIndex] : null;
 
-  // Lịch sử & Playlists (lưu localStorage)
+  // Lịch sử, Gợi ý & Playlists
   const [history, setHistory] = useState<TrackData[]>([]);
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
-  const [activeTab, setActiveTab] = useState<'queue' | 'playlists' | 'history'>('queue');
+  const [suggestionsEnabled, setSuggestionsEnabled] = useState<boolean>(true);
+  const [suggestions, setSuggestions] = useState<SuggestedTrack[]>([]);
+  const [loadingSuggestions, setLoadingSuggestions] = useState<boolean>(false);
+  const [activeTab, setActiveTab] = useState<'queue' | 'suggestions' | 'playlists' | 'history'>('queue');
 
   // Quản lý tạo/chọn Playlist
   const [newPlaylistName, setNewPlaylistName] = useState('');
@@ -146,6 +163,12 @@ export default function AudioPlayerPage() {
   const sleepEndTimeRef = useRef<number | null>(null);
   const userBaseVolumeRef = useRef<number>(1);
   const prefetchingTrackIdRef = useRef<string | null>(null);
+  const lastPlayTimeRef = useRef<number>(0);
+  const recoveryAttemptsRef = useRef<number>(0);
+  const isRecoveringRef = useRef<boolean>(false);
+  const stallTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const suggestionsEnabledRef = useRef<boolean>(suggestionsEnabled);
+  const suggestionsRef = useRef<SuggestedTrack[]>(suggestions);
 
   useEffect(() => {
     queueRef.current = queue;
@@ -174,6 +197,14 @@ export default function AudioPlayerPage() {
   useEffect(() => {
     playlistRepeatModeRef.current = playlistRepeatMode;
   }, [playlistRepeatMode]);
+
+  useEffect(() => {
+    suggestionsEnabledRef.current = suggestionsEnabled;
+  }, [suggestionsEnabled]);
+
+  useEffect(() => {
+    suggestionsRef.current = suggestions;
+  }, [suggestions]);
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
@@ -277,6 +308,11 @@ export default function AudioPlayerPage() {
         setLockScreenControlMode(savedLockMode);
       }
 
+      const savedSuggestionsEnabled = localStorage.getItem(STORAGE_KEYS.SUGGESTIONS_ENABLED);
+      if (savedSuggestionsEnabled !== null) {
+        setSuggestionsEnabled(savedSuggestionsEnabled !== 'false');
+      }
+
       const savedSync = localStorage.getItem(STORAGE_KEYS.SYNC_AUTH);
       if (savedSync) {
         loadedSync = JSON.parse(savedSync);
@@ -352,6 +388,58 @@ export default function AudioPlayerPage() {
     return () => clearTimeout(timer);
   }, [playlists, history, queue, syncSession]);
 
+  const handleToggleSuggestions = (enabled: boolean) => {
+    setSuggestionsEnabled(enabled);
+    try {
+      localStorage.setItem(STORAGE_KEYS.SUGGESTIONS_ENABLED, String(enabled));
+    } catch {}
+    if (!enabled) {
+      setSuggestions([]);
+      if (activeTab === 'suggestions') setActiveTab('queue');
+    }
+    showToast(enabled ? 'Đã bật Gợi ý & Tự phát tiếp' : 'Đã tắt tính năng Gợi ý');
+  };
+
+  // Tự động lấy danh sách Gợi ý (Related Tracks) khi đổi bài đang phát
+  useEffect(() => {
+    if (!suggestionsEnabled || !currentTrack) {
+      if (!suggestionsEnabled) setSuggestions([]);
+      return;
+    }
+
+    const controller = new AbortController();
+    setLoadingSuggestions(true);
+
+    fetch('/api/related', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        track: {
+          id: currentTrack.id,
+          originalUrl: currentTrack.originalUrl,
+          title: currentTrack.title,
+          author: currentTrack.author,
+          source: currentTrack.source,
+        },
+      }),
+      signal: controller.signal,
+    })
+      .then((res) => res.json())
+      .then((json) => {
+        if (Array.isArray(json?.suggestions)) {
+          setSuggestions(json.suggestions);
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setLoadingSuggestions(false);
+        }
+      });
+
+    return () => controller.abort();
+  }, [currentTrack?.id, currentTrack?.originalUrl, suggestionsEnabled]);
+
   const handleChangeLockScreenMode = (mode: 'track' | 'seek') => {
     setLockScreenControlMode(mode);
     try {
@@ -413,7 +501,11 @@ export default function AudioPlayerPage() {
     } catch {}
   }, []);
 
-  const fetchFreshTrack = useCallback(async (url: string): Promise<TrackData> => {
+  type ExtractApiResult =
+    | TrackData
+    | { isBatch: true; playlistName: string; tracks: TrackData[] };
+
+  const fetchExtractRaw = useCallback(async (url: string): Promise<ExtractApiResult> => {
     const response = await fetch('/api/extract', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -423,8 +515,19 @@ export default function AudioPlayerPage() {
     if (!response.ok || data.error) {
       throw new Error(data.error || 'Không thể lấy được link âm thanh.');
     }
-    return data as TrackData;
+    return data as ExtractApiResult;
   }, []);
+
+  const fetchFreshTrack = useCallback(
+    async (url: string): Promise<TrackData> => {
+      const result = await fetchExtractRaw(url);
+      if ('isBatch' in result && result.isBatch) {
+        return result.tracks[0];
+      }
+      return result as TrackData;
+    },
+    [fetchExtractRaw]
+  );
 
   const ensureValidAudioUrl = useCallback(
     async (track: TrackData): Promise<TrackData> => {
@@ -437,23 +540,42 @@ export default function AudioPlayerPage() {
       if (!isExpired) return track;
 
       const refreshed = await fetchFreshTrack(track.originalUrl);
+      const merged: TrackData = {
+        ...refreshed,
+        id: track.id,
+        title: track.title && !track.title.startsWith('Track ') ? track.title : refreshed.title,
+        author: track.author && track.author !== 'Artist' ? track.author : refreshed.author,
+        thumbnail:
+          track.thumbnail && !track.thumbnail.includes('placehold.co')
+            ? track.thumbnail
+            : refreshed.thumbnail,
+        source: track.source || refreshed.source,
+      };
       setQueue((prev) =>
-        prev.map((item) => (item.id === track.id ? { ...refreshed, id: track.id } : item))
+        prev.map((item) => (item.id === track.id ? merged : item))
       );
-      return { ...refreshed, id: track.id };
+      return merged;
     },
     [fetchFreshTrack]
   );
 
-  // Dọn dẹp Hls.js khi unmount
+  const clearStallWatchdog = useCallback(() => {
+    if (stallTimerRef.current) {
+      clearTimeout(stallTimerRef.current);
+      stallTimerRef.current = null;
+    }
+  }, []);
+
+  // Dọn dẹp Hls.js & bộ đếm chống lag khi unmount
   useEffect(() => {
     return () => {
+      clearStallWatchdog();
       if (hlsRef.current) {
         hlsRef.current.destroy();
         hlsRef.current = null;
       }
     };
-  }, []);
+  }, [clearStallWatchdog]);
 
   // Nạp nguồn phát chuẩn (dùng native <audio> trên Safari iOS và Hls.js cho Chrome/Edge/Android khi gặp SoundCloud .m3u8)
   const attachAndPlayAudio = useCallback(
@@ -536,10 +658,13 @@ export default function AudioPlayerPage() {
       const audio = audioRef.current;
       if (!audio) return;
 
+      clearStallWatchdog();
       setError(null);
       setCurrentIndex(index);
       currentIndexRef.current = index;
       trackRepeatOnceCountRef.current = 0;
+      recoveryAttemptsRef.current = 0;
+      lastPlayTimeRef.current = 0;
 
       let targetTrack = targetQueue[index];
 
@@ -561,10 +686,18 @@ export default function AudioPlayerPage() {
       } catch {
         try {
           const refreshed = await fetchFreshTrack(targetTrack.originalUrl);
-          setQueue((prev) => prev.map((t, idx) => (idx === index ? refreshed : t)));
-          await attachAndPlayAudio(audio, refreshed);
+          const merged: TrackData = {
+            ...refreshed,
+            id: targetTrack.id,
+            title: targetTrack.title || refreshed.title,
+            author: targetTrack.author || refreshed.author,
+            thumbnail: targetTrack.thumbnail || refreshed.thumbnail,
+            source: targetTrack.source || refreshed.source,
+          };
+          setQueue((prev) => prev.map((t, idx) => (idx === index ? merged : t)));
+          await attachAndPlayAudio(audio, merged);
           setIsPlaying(true);
-          addToHistory(refreshed);
+          addToHistory(merged);
         } catch (retryErr) {
           const msg =
             retryErr instanceof Error ? retryErr.message : 'Không thể phát bài hát này.';
@@ -573,8 +706,83 @@ export default function AudioPlayerPage() {
         }
       }
     },
-    [addToHistory, attachAndPlayAudio, ensureValidAudioUrl, fetchFreshTrack]
+    [addToHistory, attachAndPlayAudio, clearStallWatchdog, ensureValidAudioUrl, fetchFreshTrack]
   );
+
+  // Tự động phục hồi khi mạng chập chờn hoặc link stream bị đứng/lỗi giữa chừng
+  const recoverCurrentTrack = useCallback(async () => {
+    const audio = audioRef.current;
+    const idx = currentIndexRef.current;
+    const q = queueRef.current;
+    const track = q[idx];
+
+    if (
+      !audio ||
+      !track ||
+      isRecoveringRef.current ||
+      recoveryAttemptsRef.current >= 2 ||
+      audio.src === SILENT_AUDIO_URI
+    ) {
+      return;
+    }
+
+    isRecoveringRef.current = true;
+    recoveryAttemptsRef.current += 1;
+    clearStallWatchdog();
+
+    const resumeAt = lastPlayTimeRef.current > 1 ? lastPlayTimeRef.current : 0;
+
+    try {
+      showToast('Đang tự làm mới kết nối âm thanh...');
+      const refreshed = await fetchFreshTrack(track.originalUrl);
+      const merged: TrackData = {
+        ...refreshed,
+        id: track.id,
+        title: track.title || refreshed.title,
+        author: track.author || refreshed.author,
+        thumbnail: track.thumbnail || refreshed.thumbnail,
+        source: track.source || refreshed.source,
+      };
+      setQueue((prev) => prev.map((t, i) => (i === idx ? merged : t)));
+
+      await attachAndPlayAudio(audio, merged);
+
+      if (resumeAt > 1 && audio.duration && isFinite(audio.duration) && resumeAt < audio.duration) {
+        try {
+          audio.currentTime = resumeAt;
+        } catch {}
+      } else if (resumeAt > 1) {
+        const seekOnce = () => {
+          try {
+            if (audio.duration && resumeAt < audio.duration) {
+              audio.currentTime = resumeAt;
+            }
+          } catch {}
+          audio.removeEventListener('loadedmetadata', seekOnce);
+        };
+        audio.addEventListener('loadedmetadata', seekOnce);
+      }
+
+      setIsPlaying(true);
+    } catch {
+      // Thử chuyển sang bài kế tiếp nếu bài hiện tại chết hẳn sau 2 lần phục hồi
+    } finally {
+      isRecoveringRef.current = false;
+    }
+  }, [attachAndPlayAudio, clearStallWatchdog, fetchFreshTrack, showToast]);
+
+  const startStallWatchdog = useCallback(() => {
+    clearStallWatchdog();
+    const audio = audioRef.current;
+    if (!audio || audio.paused || !audio.src || audio.src === SILENT_AUDIO_URI) return;
+
+    stallTimerRef.current = setTimeout(() => {
+      const currentAudio = audioRef.current;
+      if (currentAudio && !currentAudio.paused && currentAudio.readyState < 3) {
+        recoverCurrentTrack();
+      }
+    }, 6500);
+  }, [clearStallWatchdog, recoverCurrentTrack]);
 
   const handleNextTrack = useCallback(() => {
     const q = queueRef.current;
@@ -634,6 +842,8 @@ export default function AudioPlayerPage() {
           ? 'TikTok Background Audio'
           : currentTrack.source === 'soundcloud'
           ? 'SoundCloud Background Audio'
+          : currentTrack.source === 'spotify'
+          ? 'Spotify Background Audio'
           : 'YouTube Background Audio',
       artwork: [
         { src: proxiedArtworkUrl, sizes: '96x96' },
@@ -744,6 +954,34 @@ export default function AudioPlayerPage() {
     }
 
     playlistRepeatOnceCountRef.current = 0;
+
+    // Nếu đang bật Gợi ý trong Cài đặt -> tự động nối & phát bài gợi ý tiếp theo
+    if (suggestionsEnabledRef.current && suggestionsRef.current.length > 0) {
+      const recentUrls = new Set(q.slice(-6).map((t) => t.originalUrl));
+      const nextSuggestion =
+        suggestionsRef.current.find((s) => !recentUrls.has(s.url)) ||
+        suggestionsRef.current[0];
+
+      if (nextSuggestion) {
+        const queuedTrack: TrackData = {
+          id: nextSuggestion.id,
+          originalUrl: nextSuggestion.url,
+          audioUrl: '',
+          title: nextSuggestion.title,
+          author: nextSuggestion.author,
+          thumbnail: nextSuggestion.thumbnail,
+          source: nextSuggestion.source,
+          mimeType: 'audio/mp4',
+          extractedAt: 0,
+        };
+        const newQueue = [...q, queuedTrack];
+        setQueue(newQueue);
+        queueRef.current = newQueue;
+        playTrackAtIndex(q.length, newQueue);
+        return;
+      }
+    }
+
     setIsPlaying(false);
     if ('mediaSession' in navigator) {
       navigator.mediaSession.playbackState = 'paused';
@@ -858,13 +1096,14 @@ export default function AudioPlayerPage() {
     return () => clearInterval(timer);
   }, [sleepTimerMinutes, checkSleepTimerAndFadeOut]);
 
-  // Pre-fetch bài tiếp theo trước khi hết bài 20s
+  // Pre-fetch bài tiếp theo trước khi hết bài 25s (hoặc ngay sau 2s với bài ngắn)
   const maybePrefetchNextTrack = useCallback(() => {
     const audio = audioRef.current;
     if (!audio || !audio.duration || !isFinite(audio.duration)) return;
 
     const timeLeft = audio.duration - audio.currentTime;
-    if (timeLeft > 20) return;
+    const shouldPrefetchShortTrack = audio.duration <= 25 && audio.currentTime >= 2;
+    if (timeLeft > 25 && !shouldPrefetchShortTrack) return;
 
     const q = queueRef.current;
     const nextIdx = currentIndexRef.current + 1;
@@ -902,7 +1141,7 @@ export default function AudioPlayerPage() {
     setError(null);
 
     if (!finalUrl) {
-      setError('Vui lòng dán link TikTok, YouTube hoặc SoundCloud vào ô bên trên.');
+      setError('Vui lòng dán link TikTok, YouTube, SoundCloud hoặc Spotify.');
       return;
     }
 
@@ -911,9 +1150,33 @@ export default function AudioPlayerPage() {
     setLoadingMode(mode);
 
     try {
-      const trackInfo = await fetchFreshTrack(finalUrl);
+      const result = await fetchExtractRaw(finalUrl);
       setInputUrl('');
       setPendingUrl('');
+
+      if ('isBatch' in result && result.isBatch) {
+        const batchTracks = result.tracks;
+        if (batchTracks.length > 0) {
+          addToHistory(batchTracks[0]);
+          if (mode === 'play' || queue.length === 0) {
+            const newQueue = [...queue];
+            const insertIdx = currentIndex >= 0 ? currentIndex + 1 : 0;
+            newQueue.splice(insertIdx, 0, ...batchTracks);
+            setQueue(newQueue);
+            queueRef.current = newQueue;
+            await playTrackAtIndex(insertIdx, newQueue);
+            showToast(`Đang phát ${batchTracks.length} bài: ${result.playlistName}`);
+          } else {
+            const newQueue = [...queue, ...batchTracks];
+            setQueue(newQueue);
+            queueRef.current = newQueue;
+            showToast(`Đã thêm ${batchTracks.length} bài từ: ${result.playlistName}`);
+          }
+        }
+        return;
+      }
+
+      const trackInfo = result as TrackData;
       addToHistory(trackInfo);
 
       if (mode === 'play' || queue.length === 0) {
@@ -936,6 +1199,21 @@ export default function AudioPlayerPage() {
     } finally {
       setLoadingMode(null);
     }
+  };
+
+  const playSuggestedTrack = async (item: SuggestedTrack, playNow: boolean) => {
+    const track: TrackData = {
+      id: item.id,
+      originalUrl: item.url,
+      audioUrl: '',
+      title: item.title,
+      author: item.author,
+      thumbnail: item.thumbnail,
+      source: item.source,
+      mimeType: 'audio/mp4',
+      extractedAt: 0,
+    };
+    await playFromSavedTrack(track, playNow);
   };
 
   const togglePlayPause = async () => {
@@ -1208,6 +1486,8 @@ export default function AudioPlayerPage() {
     ? 'TikTok'
     : /(soundcloud\.com|soundcloud\.app\.goo\.gl)/i.test(pendingUrl || inputUrl)
     ? 'SoundCloud'
+    : /(open\.spotify\.com|spotify\.link)/i.test(pendingUrl || inputUrl)
+    ? 'Spotify'
     : /(youtube\.com|youtu\.be)/i.test(pendingUrl || inputUrl)
     ? 'YouTube'
     : null;
@@ -1295,7 +1575,7 @@ export default function AudioPlayerPage() {
                   setPendingUrl(e.target.value);
                   setInputUrl(e.target.value);
                 }}
-                placeholder="Chạm giữ để Dán link TikTok / YouTube / SoundCloud..."
+                placeholder="Chạm giữ để Dán link TikTok / YT / SoundCloud / Spotify..."
                 className="w-full pl-10 pr-9 py-3 text-[15px] bg-black/40 border border-white/15 rounded-2xl text-white placeholder-white/45 focus:outline-none focus:border-cyan-400/60"
               />
               {pendingUrl && (
@@ -1355,6 +1635,8 @@ export default function AudioPlayerPage() {
         onLoginSync={handleLoginSync}
         onManualSync={handleManualSync}
         onLogoutSync={handleLogoutSync}
+        suggestionsEnabled={suggestionsEnabled}
+        onToggleSuggestions={handleToggleSuggestions}
       />
 
       {/* POPUP ĐỒNG HỒ ĐẾM NGƯỢC 1 TIẾNG (DI TAY KÉO 1-60 PHÚT) */}
@@ -1462,7 +1744,7 @@ export default function AudioPlayerPage() {
                   setShowLinkActionModal(true);
                 }
               }}
-              placeholder="Dán link TikTok, YouTube, SoundCloud..."
+              placeholder="Dán link TikTok, YouTube, SoundCloud, Spotify..."
               className="w-full py-2 text-[15px] bg-transparent text-white placeholder-white/45 focus:outline-none"
             />
             {inputUrl && (
@@ -1525,6 +1807,8 @@ export default function AudioPlayerPage() {
                       ? 'TikTok'
                       : currentTrack.source === 'soundcloud'
                       ? 'SoundCloud'
+                      : currentTrack.source === 'spotify'
+                      ? 'Spotify'
                       : 'YouTube'}
                   </span>
                 </div>
@@ -1745,48 +2029,129 @@ export default function AudioPlayerPage() {
           </section>
         )}
 
-        {/* KHỐI 3: DANH SÁCH TIẾP THEO • PLAYLIST • ĐÃ NGHE (STYLE RECENTLY TRACKS) */}
+        {/* KHỐI 3: DANH SÁCH TIẾP THEO • GỢI Ý • PLAYLIST • ĐÃ NGHE */}
         <section className="liquid-glass rounded-3xl p-4 space-y-3.5">
-          <div className="grid grid-cols-3 gap-1 p-1 rounded-2xl bg-black/35 border border-white/10">
+          <div
+            className={`grid ${
+              suggestionsEnabled ? 'grid-cols-4' : 'grid-cols-3'
+            } gap-1 p-1 rounded-2xl bg-black/35 border border-white/10`}
+          >
             <button
               type="button"
               onClick={() => setActiveTab('queue')}
-              className={`py-2.5 px-2 rounded-xl text-[13px] font-semibold flex items-center justify-center gap-1.5 transition ${
+              className={`py-2.5 px-1.5 rounded-xl text-[12px] sm:text-[13px] font-semibold flex items-center justify-center gap-1 transition ${
                 activeTab === 'queue'
                   ? 'neon-orb-primary text-white shadow'
                   : 'text-white/70 hover:text-white'
               }`}
             >
-              <ListMusic className="w-4 h-4" />
+              <ListMusic className="w-3.5 h-3.5 shrink-0" />
               <span>Tiếp ({queue.length})</span>
             </button>
+
+            {suggestionsEnabled && (
+              <button
+                type="button"
+                onClick={() => setActiveTab('suggestions')}
+                className={`py-2.5 px-1.5 rounded-xl text-[12px] sm:text-[13px] font-semibold flex items-center justify-center gap-1 transition ${
+                  activeTab === 'suggestions'
+                    ? 'neon-orb-primary text-white shadow'
+                    : 'text-white/70 hover:text-white'
+                }`}
+              >
+                <Compass className="w-3.5 h-3.5 shrink-0" />
+                <span>Gợi ý</span>
+              </button>
+            )}
 
             <button
               type="button"
               onClick={() => setActiveTab('playlists')}
-              className={`py-2.5 px-2 rounded-xl text-[13px] font-semibold flex items-center justify-center gap-1.5 transition ${
+              className={`py-2.5 px-1.5 rounded-xl text-[12px] sm:text-[13px] font-semibold flex items-center justify-center gap-1 transition ${
                 activeTab === 'playlists'
                   ? 'neon-orb-primary text-white shadow'
                   : 'text-white/70 hover:text-white'
               }`}
             >
-              <Sparkles className="w-4 h-4" />
-              <span>Playlist ({playlists.length})</span>
+              <Sparkles className="w-3.5 h-3.5 shrink-0" />
+              <span>Playlist</span>
             </button>
 
             <button
               type="button"
               onClick={() => setActiveTab('history')}
-              className={`py-2.5 px-2 rounded-xl text-[13px] font-semibold flex items-center justify-center gap-1.5 transition ${
+              className={`py-2.5 px-1.5 rounded-xl text-[12px] sm:text-[13px] font-semibold flex items-center justify-center gap-1 transition ${
                 activeTab === 'history'
                   ? 'neon-orb-primary text-white shadow'
                   : 'text-white/70 hover:text-white'
               }`}
             >
-              <History className="w-4 h-4" />
-              <span>Đã nghe ({history.length})</span>
+              <History className="w-3.5 h-3.5 shrink-0" />
+              <span>Đã nghe</span>
             </button>
           </div>
+
+          {/* TAB GỢI Ý BÀI HÁT LIÊN QUAN */}
+          {suggestionsEnabled && activeTab === 'suggestions' && (
+            <div className="space-y-2 max-h-72 overflow-y-auto no-scrollbar">
+              {!currentTrack ? (
+                <p className="text-center text-sm text-white/50 py-8">
+                  Hãy phát 1 bài hát để hiện các bài gợi ý cùng gu nhé!
+                </p>
+              ) : loadingSuggestions && suggestions.length === 0 ? (
+                <div className="py-8 flex flex-col items-center justify-center gap-2 text-xs text-white/60">
+                  <Loader2 className="w-5 h-5 animate-spin text-cyan-300" />
+                  <span>Đang tìm bài gợi ý tương tự...</span>
+                </div>
+              ) : suggestions.length === 0 ? (
+                <p className="text-center text-sm text-white/50 py-8">
+                  Chưa tìm thấy bài gợi ý cho bài này. Thử phát 1 bài YouTube, SoundCloud hoặc Spotify!
+                </p>
+              ) : (
+                suggestions.map((item, idx) => (
+                  <div
+                    key={`${item.id}_${idx}`}
+                    className="flex items-center gap-3 p-2.5 rounded-2xl bg-white/5 border border-white/10 hover:bg-white/10 transition"
+                  >
+                    <span className="w-5 text-center text-xs font-semibold text-white/50 tabular-nums shrink-0">
+                      {idx + 1}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => playSuggestedTrack(item, true)}
+                      className="flex items-center gap-3 flex-1 min-w-0 text-left"
+                    >
+                      <img
+                        src={`/api/image-proxy?url=${encodeURIComponent(item.thumbnail)}`}
+                        alt={item.title}
+                        className="w-11 h-11 rounded-xl object-cover bg-white/10 border border-white/15 shrink-0"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-semibold text-white truncate">
+                          {item.title}
+                        </p>
+                        <p className="text-xs text-white/60 truncate">
+                          {item.author} •{' '}
+                          <span className="uppercase text-[10px] text-cyan-300">
+                            {item.source}
+                          </span>
+                        </p>
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => playSuggestedTrack(item, false)}
+                      title="Thêm vào Tiếp theo"
+                      className="liquid-btn p-2 rounded-full text-cyan-300"
+                    >
+                      <ListPlus className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
 
           {/* TAB 1: HÀNG ĐỢI TIẾP THEO */}
           {activeTab === 'queue' && (
@@ -2073,16 +2438,40 @@ export default function AudioPlayerPage() {
           )}
         </section>
 
-        {/* THẺ <audio> DUY NHẤT CHUẨN iOS SAFARI BACKGROUND PLAYBACK */}
+        {/* THẺ <audio> DUY NHẤT CHUẨN iOS SAFARI + CHỐNG LAG TỰ PHỤC HỒI */}
         <audio
           ref={audioRef}
           playsInline
           preload="auto"
-          onPlay={() => setIsPlaying(true)}
-          onPause={() => setIsPlaying(false)}
+          onPlay={() => {
+            clearStallWatchdog();
+            setIsPlaying(true);
+          }}
+          onPlaying={() => {
+            clearStallWatchdog();
+            recoveryAttemptsRef.current = 0;
+          }}
+          onPause={() => {
+            clearStallWatchdog();
+            setIsPlaying(false);
+          }}
+          onWaiting={startStallWatchdog}
+          onStalled={startStallWatchdog}
+          onError={() => {
+            if (
+              audioRef.current &&
+              audioRef.current.src &&
+              audioRef.current.src !== SILENT_AUDIO_URI
+            ) {
+              recoverCurrentTrack();
+            }
+          }}
           onTimeUpdate={() => {
             if (audioRef.current) {
-              setCurrentTime(audioRef.current.currentTime);
+              clearStallWatchdog();
+              const t = audioRef.current.currentTime;
+              if (t > 0) lastPlayTimeRef.current = t;
+              setCurrentTime(t);
               updateMediaSessionPosition();
               checkSleepTimerAndFadeOut();
               maybePrefetchNextTrack();
@@ -2094,7 +2483,10 @@ export default function AudioPlayerPage() {
               updateMediaSessionPosition();
             }
           }}
-          onEnded={handleAudioEnded}
+          onEnded={() => {
+            clearStallWatchdog();
+            handleAudioEnded();
+          }}
           className="hidden"
         />
       </div>
