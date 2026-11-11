@@ -116,30 +116,30 @@ export function SettingsModal({
   };
 
   return (
-    <div className="la-modal-backdrop fixed inset-0 z-50 bg-black/72 backdrop-blur-sm flex items-end sm:items-center justify-center p-4">
-      <div className="la-modal-sheet liquid-glass w-full max-w-sm rounded-[34px] p-5 space-y-4 max-h-[88vh] overflow-y-auto no-scrollbar">
+    <div className="la-modal-backdrop fixed inset-0 z-50 bg-black/82 backdrop-blur-md flex items-end sm:items-center justify-center p-4">
+      <div className="la-modal-sheet liquid-glass-solid w-full max-w-sm rounded-[34px] p-5 space-y-4 max-h-[88vh] overflow-y-auto no-scrollbar">
         {/* Header */}
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-full bg-cyan-400/15 border border-cyan-300/30 flex items-center justify-center">
+            <div className="w-9 h-9 rounded-full bg-cyan-400/20 border border-cyan-300/35 flex items-center justify-center">
               <Settings className="w-4 h-4 text-cyan-300" />
             </div>
             <div>
               <h3 className="text-base font-semibold text-white">Cài đặt</h3>
-              <p className="text-xs text-white/60">Đồng bộ Cloud &amp; Dynamic Island</p>
+              <p className="text-xs text-white/75">Đồng bộ Cloud &amp; Dynamic Island</p>
             </div>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="liquid-btn w-9 h-9 rounded-full flex items-center justify-center text-white/80 hover:text-white"
+            className="liquid-btn w-9 h-9 rounded-full flex items-center justify-center text-white/85 hover:text-white"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
         {/* 1. ĐỒNG BỘ CLOUD BẰNG TÊN + PIN 4 SỐ (UPSTASH REDIS) */}
-        <div className="p-4 rounded-2xl bg-white/5 border border-cyan-300/20 space-y-3">
+        <div className="p-4 rounded-2xl bg-[#131b2e]/90 border border-cyan-300/25 space-y-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <Cloud className="w-4 h-4 text-cyan-300" />
@@ -156,7 +156,7 @@ export function SettingsModal({
 
           {syncSession ? (
             <div className="space-y-3">
-              <div className="p-3 rounded-xl bg-black/30 border border-white/10 flex items-center justify-between">
+              <div className="p-3 rounded-xl bg-[#070b15]/85 border border-white/15 flex items-center justify-between">
                 <div className="flex items-center gap-2.5">
                   <div className="w-8 h-8 rounded-full neon-orb-primary flex items-center justify-center text-xs font-bold text-white uppercase">
                     {syncSession.username.slice(0, 2)}
@@ -165,7 +165,7 @@ export function SettingsModal({
                     <p className="text-sm font-semibold text-white">
                       @{syncSession.username}
                     </p>
-                    <p className="text-[11px] text-white/60 flex items-center gap-1">
+                    <p className="text-[11px] text-white/75 flex items-center gap-1">
                       {syncStatus === 'syncing' ? (
                         <>
                           <Loader2 className="w-3 h-3 animate-spin text-cyan-300" />
@@ -216,13 +216,13 @@ export function SettingsModal({
             </div>
           ) : (
             <form onSubmit={handleSyncSubmit} className="space-y-2.5">
-              <p className="text-xs text-white/65 leading-relaxed">
+              <p className="text-xs text-white/75 leading-relaxed">
                 Nhập Tên (≤10 ký tự không dấu) &amp; PIN 4 số để lưu kho nhạc trên Cloud. Nếu tên chưa có sẽ tự tạo mới ngay!
               </p>
 
               <div className="grid grid-cols-2 gap-2">
                 <div className="relative flex items-center">
-                  <User className="w-3.5 h-3.5 text-white/45 absolute left-3 pointer-events-none" />
+                  <User className="w-3.5 h-3.5 text-white/55 absolute left-3 pointer-events-none" />
                   <input
                     type="text"
                     maxLength={10}
@@ -235,12 +235,12 @@ export function SettingsModal({
                       )
                     }
                     placeholder="Tên (vd: luong)"
-                    className="w-full pl-8 pr-2.5 py-2.5 text-sm bg-black/35 border border-white/15 rounded-xl text-white placeholder-white/40 focus:outline-none focus:border-cyan-400/60"
+                    className="w-full pl-8 pr-2.5 py-2.5 text-sm bg-[#060913]/90 border border-white/20 rounded-xl text-white placeholder-white/50 focus:outline-none focus:border-cyan-400/70"
                   />
                 </div>
 
                 <div className="relative flex items-center">
-                  <Lock className="w-3.5 h-3.5 text-white/45 absolute left-3 pointer-events-none" />
+                  <Lock className="w-3.5 h-3.5 text-white/55 absolute left-3 pointer-events-none" />
                   <input
                     type="password"
                     inputMode="numeric"
@@ -250,7 +250,7 @@ export function SettingsModal({
                       setPinInput(e.target.value.replace(/\D/g, '').slice(0, 4))
                     }
                     placeholder="PIN 4 số"
-                    className="w-full pl-8 pr-2.5 py-2.5 text-sm bg-black/35 border border-white/15 rounded-xl text-white placeholder-white/40 focus:outline-none focus:border-cyan-400/60 tracking-widest"
+                    className="w-full pl-8 pr-2.5 py-2.5 text-sm bg-[#060913]/90 border border-white/20 rounded-xl text-white placeholder-white/50 focus:outline-none focus:border-cyan-400/70 tracking-widest"
                   />
                 </div>
               </div>
@@ -277,14 +277,14 @@ export function SettingsModal({
         </div>
 
         {/* 2. Chức năng Dynamic Island: Đổi bài vs Tua ±5s */}
-        <div className="p-4 rounded-2xl bg-white/5 border border-white/10 space-y-3">
+        <div className="p-4 rounded-2xl bg-[#131b2e]/90 border border-white/15 space-y-3">
           <div className="flex items-center justify-between">
             <span className="text-sm font-semibold text-white">
               Nút trên Dynamic Island
             </span>
             <span className="text-[11px] text-cyan-300 font-medium">Màn hình khóa</span>
           </div>
-          <p className="text-xs text-white/60 leading-relaxed">
+          <p className="text-xs text-white/75 leading-relaxed">
             Chọn cặp nút hiển thị trên Dynamic Island &amp; Khóa màn hình iPhone:
           </p>
 
@@ -295,7 +295,7 @@ export function SettingsModal({
               className={`py-2.5 px-3 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 border transition ${
                 lockScreenControlMode === 'track'
                   ? 'neon-orb-primary text-white border-transparent'
-                  : 'bg-white/5 border-white/15 text-white/75 hover:text-white'
+                  : 'bg-white/8 border-white/15 text-white/80 hover:text-white'
               }`}
             >
               <SkipForward className="w-4 h-4" />
@@ -308,7 +308,7 @@ export function SettingsModal({
               className={`py-2.5 px-3 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 border transition ${
                 lockScreenControlMode === 'seek'
                   ? 'neon-orb-primary text-white border-transparent'
-                  : 'bg-white/5 border-white/15 text-white/75 hover:text-white'
+                  : 'bg-white/8 border-white/15 text-white/80 hover:text-white'
               }`}
             >
               <RotateCw className="w-4 h-4" />
@@ -318,7 +318,7 @@ export function SettingsModal({
         </div>
 
         {/* 2B. Bật / Tắt tính năng Gợi ý bài hát */}
-        <div className="p-4 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-between gap-3">
+        <div className="p-4 rounded-2xl bg-[#131b2e]/90 border border-white/15 flex items-center justify-between gap-3">
           <div className="space-y-0.5 min-w-0 flex-1">
             <div className="flex items-center gap-1.5">
               <Sparkles className="w-4 h-4 text-pink-300 shrink-0" />
@@ -326,7 +326,7 @@ export function SettingsModal({
                 Gợi ý &amp; Tự phát tiếp
               </span>
             </div>
-            <p className="text-xs text-white/60 leading-relaxed">
+            <p className="text-xs text-white/75 leading-relaxed">
               Hiện tab Gợi ý (YouTube, SoundCloud, TikTok, Spotify) và tự nối bài khi hết danh sách.
             </p>
           </div>
@@ -339,13 +339,13 @@ export function SettingsModal({
         </div>
 
         {/* 3. Thanh Âm lượng */}
-        <div className="p-4 rounded-2xl bg-white/5 border border-white/10 space-y-2.5">
+        <div className="p-4 rounded-2xl bg-[#131b2e]/90 border border-white/15 space-y-2.5">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <Volume2 className="w-4 h-4 text-cyan-300" />
               <span className="text-sm font-semibold text-white">Âm lượng phát</span>
             </div>
-            <span className="text-xs font-semibold text-white/75 tabular-nums">
+            <span className="text-xs font-semibold text-white/85 tabular-nums">
               {volumePct}%
             </span>
           </div>
@@ -357,22 +357,22 @@ export function SettingsModal({
             value={volume}
             onChange={(e) => onChangeVolume(parseFloat(e.target.value))}
             style={{
-              background: `linear-gradient(to right, #22d3ee 0%, #ec4899 ${volumePct}%, rgba(255,255,255,0.18) ${volumePct}%)`,
+              background: `linear-gradient(to right, #22d3ee 0%, #ec4899 ${volumePct}%, rgba(255,255,255,0.2) ${volumePct}%)`,
             }}
             className="apple-slider w-full"
           />
-          <p className="text-[11px] text-white/50">
+          <p className="text-[11px] text-white/70">
             Trên iPhone hãy dùng nút âm lượng cứng ở cạnh máy (iOS khóa web chỉnh âm lượng).
           </p>
         </div>
 
         {/* 4. Sao lưu & Khôi phục thủ công (.json) */}
-        <div className="p-4 rounded-2xl bg-white/5 border border-white/10 space-y-2.5">
+        <div className="p-4 rounded-2xl bg-[#131b2e]/90 border border-white/15 space-y-2.5">
           <div>
             <h4 className="text-sm font-semibold text-white">
               Backup thủ công (.json)
             </h4>
-            <p className="text-xs text-white/60 mt-0.5">
+            <p className="text-xs text-white/75 mt-0.5">
               Đang lưu {savedCount.playlists} playlist &amp; {savedCount.history} bài đã nghe.
             </p>
           </div>
@@ -413,7 +413,7 @@ export function SettingsModal({
         </div>
 
         {/* 5. Mẹo chạy nền iOS */}
-        <div className="p-3.5 rounded-2xl bg-cyan-500/10 border border-cyan-400/20 flex items-start gap-2.5 text-xs leading-relaxed text-white/75">
+        <div className="p-3.5 rounded-2xl bg-cyan-500/15 border border-cyan-400/30 flex items-start gap-2.5 text-xs leading-relaxed text-white/85">
           <Smartphone className="w-4 h-4 text-cyan-300 shrink-0 mt-0.5" />
           <span>
             Mở bằng <b className="text-white">Safari</b> (hoặc Thêm vào Màn hình chính) để nhạc chạy nền mượt trên <b className="text-white">Dynamic Island</b> khi tắt màn hình.
