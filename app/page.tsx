@@ -69,7 +69,13 @@ const STORAGE_KEYS = {
   PLAYLISTS: 'ios_audio_playlists_v1',
   QUEUE: 'ios_audio_queue_v1',
   LOCK_MODE: 'ios_audio_lock_mode_v1',
+  SYNC_AUTH: 'ios_audio_sync_auth_v1',
 };
+
+interface SyncSession {
+  username: string;
+  syncKey: string;
+}
 
 export default function AudioPlayerPage() {
   // Input & modals
@@ -109,6 +115,11 @@ export default function AudioPlayerPage() {
   // Chế độ nút trên Dynamic Island / Lock Screen (nằm trong Cài đặt)
   const [lockScreenControlMode, setLockScreenControlMode] = useState<'track' | 'seek'>('track');
 
+  // Trạng thái Đồng bộ Cloud (Upstash Redis + Tên & PIN 4 số)
+  const [syncSession, setSyncSession] = useState<SyncSession | null>(null);
+  const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'synced' | 'error'>('idle');
+  const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
+
   // Hẹn giờ tắt nhạc (Sleep Timer) & Fade-out
   const [sleepTimerMinutes, setSleepTimerMinutes] = useState<number | null>(null);
   const [sleepRemainingSec, setSleepRemainingSec] = useState<number | null>(null);
@@ -118,6 +129,11 @@ export default function AudioPlayerPage() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const popupInputRef = useRef<HTMLInputElement | null>(null);
   const queueRef = useRef<TrackData[]>(queue);
+  const historyRef = useRef<TrackData[]>(history);
+  const playlistsRef = useRef<Playlist[]>(playlists);
+  const syncSessionRef = useRef<SyncSession | null>(syncSession);
+  const isHydratedRef = useRef<boolean>(false);
+  const lastSyncedPayloadRef = useRef<string>('');
   const currentIndexRef = useRef<number>(currentIndex);
   const trackRepeatModeRef = useRef<RepeatMode>(trackRepeatMode);
   const playlistRepeatModeRef = useRef<RepeatMode>(playlistRepeatMode);
@@ -130,6 +146,18 @@ export default function AudioPlayerPage() {
   useEffect(() => {
     queueRef.current = queue;
   }, [queue]);
+
+  useEffect(() => {
+    historyRef.current = history;
+  }, [history]);
+
+  useEffect(() => {
+    playlistsRef.current = playlists;
+  }, [playlists]);
+
+  useEffect(() => {
+    syncSessionRef.current = syncSession;
+  }, [syncSession]);
 
   useEffect(() => {
     currentIndexRef.current = currentIndex;
@@ -150,8 +178,58 @@ export default function AudioPlayerPage() {
     }, 3000);
   }, []);
 
-  // Khởi tạo dữ liệu từ localStorage
+  // Áp dụng dữ liệu đồng bộ từ Cloud về máy
+  const applyCloudLibrary = useCallback(
+    (data: { playlists?: Playlist[]; history?: TrackData[]; queue?: TrackData[] }) => {
+      const nextPlaylists =
+        Array.isArray(data.playlists) && data.playlists.length > 0
+          ? data.playlists
+          : playlistsRef.current;
+
+      const nextHistory = Array.isArray(data.history)
+        ? data.history
+        : historyRef.current;
+
+      const shouldUpdateQueue =
+        Array.isArray(data.queue) &&
+        data.queue.length > 0 &&
+        (!audioRef.current || audioRef.current.paused);
+      const nextQueue = shouldUpdateQueue ? data.queue! : queueRef.current;
+
+      lastSyncedPayloadRef.current = JSON.stringify({
+        playlists: nextPlaylists,
+        history: nextHistory,
+        queue: nextQueue,
+      });
+
+      if (Array.isArray(data.playlists) && data.playlists.length > 0) {
+        setPlaylists(nextPlaylists);
+        try {
+          localStorage.setItem(STORAGE_KEYS.PLAYLISTS, JSON.stringify(nextPlaylists));
+        } catch {}
+        setSelectedPlaylistId((prev) =>
+          prev && nextPlaylists.some((p) => p.id === prev) ? prev : nextPlaylists[0].id
+        );
+      }
+
+      if (Array.isArray(data.history)) {
+        setHistory(nextHistory);
+        try {
+          localStorage.setItem(STORAGE_KEYS.HISTORY, JSON.stringify(nextHistory));
+        } catch {}
+      }
+
+      if (shouldUpdateQueue) {
+        setQueue(nextQueue);
+        setCurrentIndex((idx) => (idx >= 0 && idx < nextQueue.length ? idx : 0));
+      }
+    },
+    []
+  );
+
+  // Khởi tạo dữ liệu từ localStorage + tự động kéo Cloud nếu đã đăng nhập Sync
   useEffect(() => {
+    let loadedSync: SyncSession | null = null;
     try {
       const savedHistory = localStorage.getItem(STORAGE_KEYS.HISTORY);
       if (savedHistory) setHistory(JSON.parse(savedHistory));
@@ -186,10 +264,81 @@ export default function AudioPlayerPage() {
       if (savedLockMode === 'track' || savedLockMode === 'seek') {
         setLockScreenControlMode(savedLockMode);
       }
+
+      const savedSync = localStorage.getItem(STORAGE_KEYS.SYNC_AUTH);
+      if (savedSync) {
+        loadedSync = JSON.parse(savedSync);
+        if (loadedSync?.username && loadedSync?.syncKey) {
+          setSyncSession(loadedSync);
+        }
+      }
     } catch (e) {
       console.error('Lỗi đọc localStorage:', e);
+    } finally {
+      setTimeout(() => {
+        isHydratedRef.current = true;
+      }, 200);
     }
-  }, []);
+
+    if (loadedSync?.username && loadedSync?.syncKey) {
+      setSyncStatus('syncing');
+      fetch('/api/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'pull',
+          username: loadedSync.username,
+          syncKey: loadedSync.syncKey,
+        }),
+      })
+        .then(async (res) => {
+          const json = await res.json();
+          if (!res.ok) throw new Error(json.error || 'Sync error');
+          applyCloudLibrary(json);
+          setLastSyncedAt(json.updatedAt || Date.now());
+          setSyncStatus('synced');
+        })
+        .catch(() => {
+          setSyncStatus('error');
+        });
+    }
+  }, [applyCloudLibrary]);
+
+  // Tự động đẩy thay đổi lên Upstash Redis sau 1.2 giây khi đã bật Sync
+  useEffect(() => {
+    if (!isHydratedRef.current || !syncSession) return;
+    const currentPayload = JSON.stringify({ playlists, history, queue });
+    if (currentPayload === lastSyncedPayloadRef.current) return;
+
+    const timer = setTimeout(async () => {
+      try {
+        setSyncStatus('syncing');
+        const res = await fetch('/api/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'push',
+            username: syncSession.username,
+            syncKey: syncSession.syncKey,
+            data: {
+              playlists,
+              history,
+              queue,
+            },
+          }),
+        });
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error || 'Push error');
+        lastSyncedPayloadRef.current = currentPayload;
+        setLastSyncedAt(json.updatedAt || Date.now());
+        setSyncStatus('synced');
+      } catch {
+        setSyncStatus('error');
+      }
+    }, 1200);
+
+    return () => clearTimeout(timer);
+  }, [playlists, history, queue, syncSession]);
 
   const handleChangeLockScreenMode = (mode: 'track' | 'seek') => {
     setLockScreenControlMode(mode);
@@ -902,6 +1051,82 @@ export default function AudioPlayerPage() {
     }
   };
 
+  // Đăng nhập / Tạo mới tài khoản Sync (Tên <=10 ký tự không dấu + PIN 4 số)
+  const handleLoginSync = async (username: string, pin: string) => {
+    setSyncStatus('syncing');
+    const res = await fetch('/api/sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'auth',
+        username,
+        pin,
+        localData: {
+          playlists: playlistsRef.current,
+          history: historyRef.current,
+          queue: queueRef.current,
+        },
+      }),
+    });
+
+    const json = await res.json();
+    if (!res.ok) {
+      setSyncStatus('error');
+      throw new Error(json.error || 'Không thể đăng nhập đồng bộ.');
+    }
+
+    const session: SyncSession = { username: json.username, syncKey: json.syncKey };
+    setSyncSession(session);
+    try {
+      localStorage.setItem(STORAGE_KEYS.SYNC_AUTH, JSON.stringify(session));
+    } catch {}
+
+    applyCloudLibrary(json);
+    setLastSyncedAt(json.updatedAt || Date.now());
+    setSyncStatus('synced');
+    showToast(
+      json.isNew
+        ? `Đã tạo @${json.username} & bật đồng bộ!`
+        : `Đã đăng nhập @${json.username} & đồng bộ xong!`
+    );
+  };
+
+  const handleManualSync = async () => {
+    if (!syncSession) return;
+    setSyncStatus('syncing');
+    try {
+      // Kéo dữ liệu mới nhất từ Cloud hoặc đẩy nếu vừa chỉnh sửa
+      const res = await fetch('/api/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'pull',
+          username: syncSession.username,
+          syncKey: syncSession.syncKey,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'Sync failed');
+      applyCloudLibrary(json);
+      setLastSyncedAt(json.updatedAt || Date.now());
+      setSyncStatus('synced');
+      showToast('Đã đồng bộ dữ liệu mới nhất!');
+    } catch (err) {
+      setSyncStatus('error');
+      showToast(err instanceof Error ? err.message : 'Đồng bộ thất bại');
+    }
+  };
+
+  const handleLogoutSync = () => {
+    setSyncSession(null);
+    setSyncStatus('idle');
+    setLastSyncedAt(null);
+    try {
+      localStorage.removeItem(STORAGE_KEYS.SYNC_AUTH);
+    } catch {}
+    showToast('Đã đăng xuất đồng bộ Cloud');
+  };
+
   const selectedPlaylist = playlists.find((p) => p.id === selectedPlaylistId) || playlists[0];
   const progressPct = duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0;
   const isCustomSleepTime =
@@ -1052,6 +1277,12 @@ export default function AudioPlayerPage() {
         onExportBackup={handleExportBackup}
         onImportBackup={handleImportBackup}
         savedCount={{ playlists: playlists.length, history: history.length }}
+        syncSession={syncSession}
+        syncStatus={syncStatus}
+        lastSyncedAt={lastSyncedAt}
+        onLoginSync={handleLoginSync}
+        onManualSync={handleManualSync}
+        onLogoutSync={handleLogoutSync}
       />
 
       {/* POPUP ĐỒNG HỒ ĐẾM NGƯỢC 1 TIẾNG (DI TAY KÉO 1-60 PHÚT) */}
@@ -1124,8 +1355,19 @@ export default function AudioPlayerPage() {
             onClick={() => setShowSettingsModal(true)}
             className="liquid-pill px-3.5 py-2 rounded-full flex items-center gap-2 text-xs font-semibold text-white/90 hover:text-white active:scale-95 transition"
           >
+            {syncSession && (
+              <span
+                className={`w-2 h-2 rounded-full ${
+                  syncStatus === 'error'
+                    ? 'bg-rose-400'
+                    : syncStatus === 'syncing'
+                    ? 'bg-amber-300 animate-pulse'
+                    : 'bg-emerald-400 shadow-[0_0_8px_#34d399]'
+                }`}
+              />
+            )}
             <Settings className="w-4 h-4 text-cyan-300" />
-            <span>Cài đặt</span>
+            <span>{syncSession ? `@${syncSession.username}` : 'Cài đặt'}</span>
           </button>
         </header>
 
