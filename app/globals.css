@@ -224,3 +224,42 @@ input[type="range"].apple-slider:active::-webkit-slider-thumb {
   -ms-overflow-style: none;
   scrollbar-width: none;
 }
+
+/* Ảnh bìa nền làm mờ ở độ phân giải thu gọn -> tiết kiệm ~4x GPU VRAM trên iPhone Retina */
+.la-ambient-backdrop {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 56%;
+  height: 56%;
+  object-fit: cover;
+  opacity: 0.25;
+  filter: blur(18px) saturate(140%);
+  transform: translate3d(-50%, -50%, 0) scale(2.05);
+  transition: opacity 700ms ease;
+  pointer-events: none;
+}
+
+/* Khi khóa màn hình hoặc ẩn tab trên iPhone -> tạm đóng băng animation & giải phóng GPU layer giảm nguy cơ iOS bóp RAM Safari */
+html[data-bg-hidden="true"] *,
+html[data-bg-hidden="true"] *::before,
+html[data-bg-hidden="true"] *::after {
+  animation-play-state: paused !important;
+  will-change: auto !important;
+}
+
+html[data-bg-hidden="true"] .liquid-glass,
+html[data-bg-hidden="true"] .liquid-glass-solid,
+html[data-bg-hidden="true"] .liquid-pill,
+html[data-bg-hidden="true"] .liquid-btn,
+html[data-bg-hidden="true"] .u208-bar,
+html[data-bg-hidden="true"] .u218-bar,
+html[data-bg-hidden="true"] .u228-card {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+html[data-bg-hidden="true"] .la-ambient-backdrop,
+html[data-bg-hidden="true"] .snow-flake {
+  display: none !important;
+}
