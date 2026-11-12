@@ -240,6 +240,9 @@ export default function AudioPlayerPage() {
   >(new Map());
   const relatedFetchingForRef = useRef<string | null>(null);
   const lastUiSecondRef = useRef<number>(-1);
+  const carriedSuggestionsRef = useRef<SuggestedTrack[]>([]);
+  const userPausedRef = useRef<boolean>(false);
+  const unexpectedPauseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     queueRef.current = queue;
@@ -364,13 +367,45 @@ export default function AudioPlayerPage() {
           if (!oldest) break;
           prefetchedSuggestCacheRef.current.delete(oldest);
         }
+      } else {
+        // Khi quay lại app trên iPhone: nếu nhạc đang bật mà bị hệ thống ngắt nguồn ở nền -> tự nối lại
+        const audio = audioRef.current;
+        if (
+          audio &&
+          !userPausedRef.current &&
+          !isSwitchingTrackRef.current &&
+          !isRecoveringRef.current &&
+          queueRef.current[currentIndexRef.current] &&
+          audio.paused &&
+          !audio.ended &&
+          (audio.error || audio.readyState < 2 || !audio.src || audio.src === SILENT_AUDIO_URI)
+        ) {
+          void recoverSelfRef.current?.();
+        }
+      }
+    };
+
+    const handleOnlineResume = () => {
+      const audio = audioRef.current;
+      if (
+        audio &&
+        !userPausedRef.current &&
+        !isSwitchingTrackRef.current &&
+        !isRecoveringRef.current &&
+        queueRef.current[currentIndexRef.current] &&
+        audio.paused &&
+        !audio.ended
+      ) {
+        void recoverSelfRef.current?.();
       }
     };
 
     syncVisibility();
     document.addEventListener('visibilitychange', syncVisibility);
+    window.addEventListener('online', handleOnlineResume);
     return () => {
       document.removeEventListener('visibilitychange', syncVisibility);
+      window.removeEventListener('online', handleOnlineResume);
       delete document.documentElement.dataset.bgHidden;
     };
   }, []);
@@ -544,13 +579,33 @@ export default function AudioPlayerPage() {
       if (!suggestionsEnabledRef.current || !track?.originalUrl) return [];
 
       const cacheKey = `${track.id}|${track.originalUrl}`;
+      const carried = carriedSuggestionsRef.current.filter(
+        (item) => item.url && item.url !== track.originalUrl
+      );
+
+      const mergeWithCarried = (fetched: SuggestedTrack[]): SuggestedTrack[] => {
+        if (carried.length === 0) return fetched;
+        const seen = new Set(carried.map((item) => item.url));
+        const rest = fetched.filter(
+          (item) => item.url && item.url !== track.originalUrl && !seen.has(item.url)
+        );
+        return [...carried, ...rest];
+      };
+
       const cached = relatedCacheRef.current.get(cacheKey);
       if (cached) {
-        setSuggestions(cached.list);
-        suggestionsRef.current = cached.list;
+        const mergedCached = mergeWithCarried(cached.list);
+        carriedSuggestionsRef.current = [];
+        setSuggestions(mergedCached);
+        suggestionsRef.current = mergedCached;
         setSuggestHasMore(cached.hasMore);
         setSuggestOffset(cached.nextOffset);
-        return cached.list;
+        return mergedCached;
+      }
+
+      if (carried.length > 0) {
+        setSuggestions(carried);
+        suggestionsRef.current = carried;
       }
 
       if (relatedFetchingForRef.current === cacheKey) {
@@ -582,6 +637,8 @@ export default function AudioPlayerPage() {
 
         if (Array.isArray(json?.suggestions)) {
           const list = json.suggestions as SuggestedTrack[];
+          const mergedList = mergeWithCarried(list);
+          carriedSuggestionsRef.current = [];
           const hasMore = Boolean(json?.hasMore) || list.length >= 4;
           const nextOffset = Number(json?.nextOffset ?? list.length);
 
@@ -591,11 +648,11 @@ export default function AudioPlayerPage() {
           }
           relatedCacheRef.current.set(cacheKey, { list, hasMore, nextOffset });
 
-          setSuggestions(list);
-          suggestionsRef.current = list;
+          setSuggestions(mergedList);
+          suggestionsRef.current = mergedList;
           setSuggestHasMore(hasMore);
           setSuggestOffset(nextOffset);
-          return list;
+          return mergedList;
         }
       } catch {
       } finally {
@@ -612,10 +669,16 @@ export default function AudioPlayerPage() {
     []
   );
 
-  // Chỉ tải Gợi ý khi người dùng mở trang Tìm & Gợi ý (không tự chạy nền + extract ngầm khi đang nghe trên trang chủ -> tiết kiệm 5G)
+  // Tự động nạp sẵn danh sách Gợi ý (B, C, D...) theo bài đang phát A (~3KB JSON, không tải nhạc/ảnh thừa)
+  // Chỉ chạy khi đổi sang bài hát khác (theo id/url), không chạy lại khi chỉ cập nhật audioUrl lúc stream
+  const activeTrackId = currentTrack?.id;
+  const activeTrackUrl = currentTrack?.originalUrl;
+
   useEffect(() => {
-    if (!suggestionsEnabled || !currentTrack) {
+    const activeTrack = queueRef.current[currentIndexRef.current];
+    if (!suggestionsEnabled || !activeTrackId || !activeTrackUrl || !activeTrack) {
       if (!suggestionsEnabled) {
+        carriedSuggestionsRef.current = [];
         setSuggestions([]);
         suggestionsRef.current = [];
         setSuggestOffset(0);
@@ -626,38 +689,19 @@ export default function AudioPlayerPage() {
 
     discoverSeedTrackRef.current = null;
     usedChainSeedsRef.current.clear();
-    if (currentTrack.originalUrl) {
-      usedChainSeedsRef.current.add(currentTrack.originalUrl);
-    }
-
-    const cacheKey = `${currentTrack.id}|${currentTrack.originalUrl}`;
-    const cached = relatedCacheRef.current.get(cacheKey);
-    if (cached) {
-      setSuggestions(cached.list);
-      suggestionsRef.current = cached.list;
-      setSuggestHasMore(cached.hasMore);
-      setSuggestOffset(cached.nextOffset);
-      return;
-    }
-
-    // Chưa sang trang Tìm & Gợi ý -> không tự tải nền để tránh tốn 5G & CPU
-    if (activePage !== 'discover') {
-      setSuggestions([]);
-      suggestionsRef.current = [];
-      setSuggestOffset(0);
-      setSuggestHasMore(false);
-      return;
+    if (activeTrackUrl) {
+      usedChainSeedsRef.current.add(activeTrackUrl);
     }
 
     const controller = new AbortController();
     setSuggestOffset(0);
     setSuggestHasMore(false);
-    void ensureRelatedForTrack(currentTrack, controller.signal);
+    void ensureRelatedForTrack(activeTrack, controller.signal);
 
     return () => {
       controller.abort();
     };
-  }, [activePage, currentTrack, ensureRelatedForTrack, suggestionsEnabled]);
+  }, [activeTrackId, activeTrackUrl, ensureRelatedForTrack, suggestionsEnabled]);
 
   // Nếu chưa phát bài nào mà người dùng vuốt sang trang Tìm & Gợi ý -> tự nạp bảng gợi ý nhạc hot kiểu YouTube
   useEffect(() => {
@@ -1062,16 +1106,24 @@ export default function AudioPlayerPage() {
     }
   }, []);
 
+  const clearUnexpectedPauseTimer = useCallback(() => {
+    if (unexpectedPauseTimerRef.current) {
+      clearTimeout(unexpectedPauseTimerRef.current);
+      unexpectedPauseTimerRef.current = null;
+    }
+  }, []);
+
   // Dọn dẹp Hls.js & bộ đếm chống lag khi unmount
   useEffect(() => {
     return () => {
       clearStallWatchdog();
+      clearUnexpectedPauseTimer();
       if (hlsRef.current) {
         hlsRef.current.destroy();
         hlsRef.current = null;
       }
     };
-  }, [clearStallWatchdog]);
+  }, [clearStallWatchdog, clearUnexpectedPauseTimer]);
 
   // Nạp nguồn phát chuẩn (dùng native <audio> trên Safari iOS và Hls.js cho Chrome/Edge/Android khi gặp SoundCloud .m3u8)
   const attachAndPlayAudio = useCallback(
@@ -1158,7 +1210,9 @@ export default function AudioPlayerPage() {
 
       const reqId = ++playRequestIdRef.current;
       isSwitchingTrackRef.current = true;
+      userPausedRef.current = false;
       clearStallWatchdog();
+      clearUnexpectedPauseTimer();
       setError(null);
       setCurrentIndex(index);
       currentIndexRef.current = index;
@@ -1268,7 +1322,14 @@ export default function AudioPlayerPage() {
         }
       }
     },
-    [addToHistory, attachAndPlayAudio, clearStallWatchdog, ensureValidAudioUrl, fetchFreshTrack]
+    [
+      addToHistory,
+      attachAndPlayAudio,
+      clearStallWatchdog,
+      clearUnexpectedPauseTimer,
+      ensureValidAudioUrl,
+      fetchFreshTrack,
+    ]
   );
 
   const recoverSelfRef = useRef<(() => Promise<void>) | null>(null);
@@ -1290,10 +1351,11 @@ export default function AudioPlayerPage() {
       return;
     }
 
-    if (recoveryAttemptsRef.current >= 2) {
-      if (recoveryAttemptsRef.current === 2) {
-        recoveryAttemptsRef.current = 3;
+    if (recoveryAttemptsRef.current >= 3) {
+      if (recoveryAttemptsRef.current === 3) {
+        recoveryAttemptsRef.current = 4;
         clearStallWatchdog();
+        clearUnexpectedPauseTimer();
         if (q.length > 1) {
           showToast('Nguồn phát bài này đang lỗi, chuyển sang bài tiếp...');
           void playTrackAtIndex((idx + 1) % q.length);
@@ -1306,17 +1368,32 @@ export default function AudioPlayerPage() {
     }
 
     isRecoveringRef.current = true;
+    userPausedRef.current = false;
     const attemptNo = recoveryAttemptsRef.current + 1;
     recoveryAttemptsRef.current = attemptNo;
     clearStallWatchdog();
+    clearUnexpectedPauseTimer();
 
     const resumeAt = lastPlayTimeRef.current > 1 ? lastPlayTimeRef.current : 0;
+
+    // Giữ AudioSession sống khi đang tắt màn hình lúc xin link stream mới
+    if (typeof document !== 'undefined' && document.hidden) {
+      try {
+        if (hlsRef.current) {
+          hlsRef.current.destroy();
+          hlsRef.current = null;
+        }
+        audio.src = SILENT_AUDIO_URI;
+        audio.loop = true;
+        void audio.play().catch(() => {});
+      } catch {}
+    }
 
     try {
       showToast(
         attemptNo === 1
           ? 'Đang tự làm mới kết nối âm thanh...'
-          : 'Đang thử kết nối lại nguồn âm thanh (lần 2)...'
+          : `Đang thử kết nối lại nguồn âm thanh (lần ${attemptNo})...`
       );
       const refreshed = await fetchFreshTrack(
         track.originalUrl,
@@ -1368,18 +1445,19 @@ export default function AudioPlayerPage() {
       const latestIdx = currentIndexRef.current;
       if (latestQ[latestIdx]?.id !== track.id) return;
 
-      if (attemptNo < 2) {
+      if (attemptNo < 3) {
         const failedTrackId = track.id;
         setTimeout(() => {
           if (
             queueRef.current[currentIndexRef.current]?.id === failedTrackId &&
-            !isSwitchingTrackRef.current
+            !isSwitchingTrackRef.current &&
+            !userPausedRef.current
           ) {
             void recoverSelfRef.current?.();
           }
-        }, 700);
+        }, 800);
       } else if (latestQ.length > 1) {
-        recoveryAttemptsRef.current = 3;
+        recoveryAttemptsRef.current = 4;
         showToast('Không thể phục hồi bài này, chuyển sang bài tiếp...');
         setTimeout(() => {
           if (
@@ -1390,14 +1468,21 @@ export default function AudioPlayerPage() {
           }
         }, 350);
       } else {
-        recoveryAttemptsRef.current = 3;
+        recoveryAttemptsRef.current = 4;
         setError('Mất kết nối nguồn âm thanh. Vui lòng thử phát lại hoặc đổi bài.');
         setIsPlaying(false);
       }
     } finally {
       isRecoveringRef.current = false;
     }
-  }, [attachAndPlayAudio, clearStallWatchdog, fetchFreshTrack, playTrackAtIndex, showToast]);
+  }, [
+    attachAndPlayAudio,
+    clearStallWatchdog,
+    clearUnexpectedPauseTimer,
+    fetchFreshTrack,
+    playTrackAtIndex,
+    showToast,
+  ]);
 
   useEffect(() => {
     recoverSelfRef.current = recoverCurrentTrack;
@@ -1420,23 +1505,104 @@ export default function AudioPlayerPage() {
       const currentAudio = audioRef.current;
       if (
         !isSwitchingTrackRef.current &&
+        !userPausedRef.current &&
         currentAudio &&
         !currentAudio.paused &&
         currentAudio.readyState < 3
       ) {
         recoverCurrentTrack();
       }
-    }, 6500);
+    }, 4500);
   }, [clearStallWatchdog, recoverCurrentTrack]);
 
+  // Chuyển sang bài kế tiếp ngay trong danh sách Gợi ý (B -> C -> D...), giữ đúng thứ tự và tái sử dụng cache đã prefetch
+  const playNextSuggestionTrack = useCallback(async (): Promise<boolean> => {
+    if (!suggestionsEnabledRef.current) return false;
+    const q = queueRef.current;
+    const idx = currentIndexRef.current;
+
+    let pool = suggestionsRef.current;
+    if (pool.length === 0 && q[idx]) {
+      pool = await ensureRelatedForTrack(q[idx]);
+    }
+    if (pool.length === 0) return false;
+
+    const recentUrls = new Set(q.slice(-8).map((t) => t.originalUrl));
+    const nextSuggestion =
+      pool.find((s) => !recentUrls.has(s.url)) || pool[0];
+    if (!nextSuggestion) return false;
+
+    // Giữ lại các bài kế tiếp sau bài B (C, D...) để phát đúng thứ tự khi nạp gợi ý cho B
+    carriedSuggestionsRef.current = pool.filter(
+      (s) => s.url !== nextSuggestion.url && !recentUrls.has(s.url)
+    );
+
+    const cachedSuggest = prefetchedSuggestCacheRef.current.get(nextSuggestion.url);
+    const suggestTtl =
+      nextSuggestion.source === 'soundcloud' ? SOUNDCLOUD_TTL_MS : STREAM_TTL_MS;
+    const isCachedFresh =
+      cachedSuggest &&
+      cachedSuggest.audioUrl &&
+      cachedSuggest.extractedAt &&
+      Date.now() - cachedSuggest.extractedAt <= suggestTtl;
+
+    const queuedTrack: TrackData = isCachedFresh
+      ? {
+          ...cachedSuggest,
+          id: nextSuggestion.id,
+          title: nextSuggestion.title || cachedSuggest.title,
+          author: nextSuggestion.author || cachedSuggest.author,
+          thumbnail: nextSuggestion.thumbnail || cachedSuggest.thumbnail,
+          source: cachedSuggest.source || nextSuggestion.source,
+        }
+      : {
+          id: nextSuggestion.id,
+          originalUrl: nextSuggestion.url,
+          audioUrl: '',
+          title: nextSuggestion.title,
+          author: nextSuggestion.author,
+          thumbnail: nextSuggestion.thumbnail,
+          source: nextSuggestion.source,
+          mimeType: 'audio/mp4',
+          extractedAt: 0,
+        };
+
+    // Giữ hàng đợi gọn tối đa 15 bài gần nhất khi phát liên tục để tiết kiệm RAM trên iPhone
+    const baseQueue = q.length >= 15 ? q.slice(-14) : q;
+    const newQueue = [...baseQueue, queuedTrack];
+    setQueue(newQueue);
+    queueRef.current = newQueue;
+    await playTrackAtIndex(newQueue.length - 1, newQueue);
+    return true;
+  }, [ensureRelatedForTrack, playTrackAtIndex]);
+
   const handleNextTrack = useCallback(() => {
+    userPausedRef.current = false;
     const q = queueRef.current;
     const idx = currentIndexRef.current;
     if (q.length === 0) return;
 
-    const nextIdx = idx + 1 < q.length ? idx + 1 : 0;
-    playTrackAtIndex(nextIdx);
-  }, [playTrackAtIndex]);
+    if (idx + 1 < q.length) {
+      void playTrackAtIndex(idx + 1);
+      return;
+    }
+
+    if (playlistRepeatModeRef.current !== 'off') {
+      void playTrackAtIndex(0);
+      return;
+    }
+
+    if (suggestionsEnabledRef.current) {
+      void playNextSuggestionTrack().then((played) => {
+        if (!played && q.length > 1) {
+          void playTrackAtIndex(0);
+        }
+      });
+      return;
+    }
+
+    void playTrackAtIndex(0);
+  }, [playNextSuggestionTrack, playTrackAtIndex]);
 
   const handlePrevTrack = useCallback(() => {
     const audio = audioRef.current;
@@ -1501,13 +1667,22 @@ export default function AudioPlayerPage() {
     });
 
     navigator.mediaSession.setActionHandler('play', async () => {
+      userPausedRef.current = false;
       try {
+        if (!audio.src || audio.src === SILENT_AUDIO_URI || audio.error) {
+          await recoverCurrentTrack();
+          return;
+        }
         await audio.play();
         navigator.mediaSession.playbackState = 'playing';
-      } catch {}
+      } catch {
+        await recoverCurrentTrack();
+      }
     });
 
     navigator.mediaSession.setActionHandler('pause', () => {
+      userPausedRef.current = true;
+      clearUnexpectedPauseTimer();
       audio.pause();
       navigator.mediaSession.playbackState = 'paused';
     });
@@ -1545,8 +1720,10 @@ export default function AudioPlayerPage() {
   }, [
     currentTrack,
     lockScreenControlMode,
+    clearUnexpectedPauseTimer,
     handleNextTrack,
     handlePrevTrack,
+    recoverCurrentTrack,
     seekRelative,
     updateMediaSessionPosition,
   ]);
@@ -1600,62 +1777,17 @@ export default function AudioPlayerPage() {
 
     playlistRepeatOnceCountRef.current = 0;
 
-    // Nếu đang bật Gợi ý trong Cài đặt -> tự động nối & phát bài gợi ý tiếp theo (lấy on-demand nếu chưa tải)
+    // Nếu đang bật Gợi ý trong Cài đặt -> tự động nối & phát đúng bài gợi ý tiếp theo (B -> C -> D...)
     if (suggestionsEnabledRef.current) {
-      let pool = suggestionsRef.current;
-      if (pool.length === 0 && q[idx]) {
-        pool = await ensureRelatedForTrack(q[idx]);
-      }
-
-      if (pool.length > 0) {
-        const recentUrls = new Set(q.slice(-6).map((t) => t.originalUrl));
-        const nextSuggestion =
-          pool.find((s) => !recentUrls.has(s.url)) || pool[0];
-
-        if (nextSuggestion) {
-          const cachedSuggest = prefetchedSuggestCacheRef.current.get(nextSuggestion.url);
-          const suggestTtl =
-            nextSuggestion.source === 'soundcloud' ? SOUNDCLOUD_TTL_MS : STREAM_TTL_MS;
-          const isCachedFresh =
-            cachedSuggest &&
-            cachedSuggest.audioUrl &&
-            cachedSuggest.extractedAt &&
-            Date.now() - cachedSuggest.extractedAt <= suggestTtl;
-
-          const queuedTrack: TrackData = isCachedFresh
-            ? {
-                ...cachedSuggest,
-                id: nextSuggestion.id,
-                title: nextSuggestion.title || cachedSuggest.title,
-                author: nextSuggestion.author || cachedSuggest.author,
-                thumbnail: nextSuggestion.thumbnail || cachedSuggest.thumbnail,
-                source: cachedSuggest.source || nextSuggestion.source,
-              }
-            : {
-                id: nextSuggestion.id,
-                originalUrl: nextSuggestion.url,
-                audioUrl: '',
-                title: nextSuggestion.title,
-                author: nextSuggestion.author,
-                thumbnail: nextSuggestion.thumbnail,
-                source: nextSuggestion.source,
-                mimeType: 'audio/mp4',
-                extractedAt: 0,
-              };
-          const newQueue = [...q, queuedTrack];
-          setQueue(newQueue);
-          queueRef.current = newQueue;
-          playTrackAtIndex(q.length, newQueue);
-          return;
-        }
-      }
+      const playedNext = await playNextSuggestionTrack();
+      if (playedNext) return;
     }
 
     setIsPlaying(false);
     if ('mediaSession' in navigator) {
       navigator.mediaSession.playbackState = 'paused';
     }
-  }, [ensureRelatedForTrack, playTrackAtIndex]);
+  }, [playNextSuggestionTrack]);
 
   useEffect(() => {
     if (audioRef.current) {
@@ -1737,6 +1869,8 @@ export default function AudioPlayerPage() {
       setIsFadingOut(false);
 
       if (audio) {
+        userPausedRef.current = true;
+        clearUnexpectedPauseTimer();
         audio.pause();
         audio.volume = userBaseVolumeRef.current;
         setVolume(userBaseVolumeRef.current);
@@ -1897,12 +2031,11 @@ export default function AudioPlayerPage() {
         if (batchTracks.length > 0) {
           addToHistory(batchTracks[0]);
           if (mode === 'play' || queue.length === 0) {
-            const newQueue = [...queue];
-            const insertIdx = currentIndex >= 0 ? currentIndex + 1 : 0;
-            newQueue.splice(insertIdx, 0, ...batchTracks);
+            carriedSuggestionsRef.current = [];
+            const newQueue = batchTracks;
             setQueue(newQueue);
             queueRef.current = newQueue;
-            await playTrackAtIndex(insertIdx, newQueue);
+            await playTrackAtIndex(0, newQueue);
             showToast(`Đang phát ${batchTracks.length} bài: ${result.playlistName}`);
           } else {
             const newQueue = [...queue, ...batchTracks];
@@ -1918,12 +2051,12 @@ export default function AudioPlayerPage() {
       addToHistory(trackInfo);
 
       if (mode === 'play' || queue.length === 0) {
-        const newQueue = [...queue];
-        const insertIdx = currentIndex >= 0 ? currentIndex + 1 : 0;
-        newQueue.splice(insertIdx, 0, trackInfo);
+        // Bắt đầu phiên phát mới từ bài vừa mở -> bài tiếp theo sẽ là B, C, D trong Gợi ý chứ không phải bài cũ trước đó
+        carriedSuggestionsRef.current = [];
+        const newQueue = [trackInfo];
         setQueue(newQueue);
         queueRef.current = newQueue;
-        await playTrackAtIndex(insertIdx, newQueue);
+        await playTrackAtIndex(0, newQueue);
         showToast(`Đang phát: ${trackInfo.title}`);
       } else {
         const newQueue = [...queue, trackInfo];
@@ -1939,8 +2072,17 @@ export default function AudioPlayerPage() {
     }
   };
 
-  const playSuggestedTrack = async (item: SuggestedTrack, playNow: boolean) => {
+  const playSuggestedTrack = async (
+    item: SuggestedTrack,
+    playNow: boolean,
+    remainingAfter?: SuggestedTrack[]
+  ) => {
     void unlockAudioOnUserGesture();
+    if (playNow) {
+      carriedSuggestionsRef.current = remainingAfter
+        ? remainingAfter.filter((s) => s.url && s.url !== item.url)
+        : [];
+    }
     const cached = prefetchedSuggestCacheRef.current.get(item.url);
     const ttl = item.source === 'soundcloud' ? SOUNDCLOUD_TTL_MS : STREAM_TTL_MS;
     const isFresh =
@@ -1970,6 +2112,7 @@ export default function AudioPlayerPage() {
     if (!audio) return;
 
     if (!currentTrack && queue.length > 0) {
+      userPausedRef.current = false;
       void unlockAudioOnUserGesture();
       await playTrackAtIndex(0);
       return;
@@ -1977,7 +2120,8 @@ export default function AudioPlayerPage() {
     if (!currentTrack) return;
 
     if (audio.paused) {
-      if (!audio.src || audio.src === SILENT_AUDIO_URI) {
+      userPausedRef.current = false;
+      if (!audio.src || audio.src === SILENT_AUDIO_URI || audio.error) {
         void unlockAudioOnUserGesture();
         await playTrackAtIndex(currentIndex);
         return;
@@ -1991,9 +2135,11 @@ export default function AudioPlayerPage() {
         }
       } catch {
         setIsPlaying(false);
-        await playTrackAtIndex(currentIndex);
+        await recoverCurrentTrack();
       }
     } else {
+      userPausedRef.current = true;
+      clearUnexpectedPauseTimer();
       audio.pause();
       setIsPlaying(false);
       if ('mediaSession' in navigator) {
@@ -2029,17 +2175,11 @@ export default function AudioPlayerPage() {
     void unlockAudioOnUserGesture();
 
     if (playNow || queue.length === 0) {
-      const existingIdx = queue.findIndex((t) => t.id === track.id);
-      if (existingIdx !== -1) {
-        await playTrackAtIndex(existingIdx);
-      } else {
-        const insertIdx = currentIndex >= 0 ? currentIndex + 1 : 0;
-        const newQueue = [...queue];
-        newQueue.splice(insertIdx, 0, track);
-        setQueue(newQueue);
-        queueRef.current = newQueue;
-        await playTrackAtIndex(insertIdx, newQueue);
-      }
+      // Phát ngay một bài mới -> làm sạch hàng đợi cũ trước đó để bài tiếp theo đi thẳng vào danh sách gợi ý (B, C, D...)
+      const newQueue = [track];
+      setQueue(newQueue);
+      queueRef.current = newQueue;
+      await playTrackAtIndex(0, newQueue);
     } else {
       const newQueue = [...queue, track];
       setQueue(newQueue);
@@ -2432,6 +2572,14 @@ export default function AudioPlayerPage() {
     : /(youtube\.com|youtu\.be)/i.test(pendingUrl || inputUrl)
     ? 'YouTube'
     : null;
+
+  const upcomingSuggestions = useMemo(() => {
+    if (!suggestionsEnabled || playlistRepeatMode !== 'off' || suggestions.length === 0) {
+      return [];
+    }
+    const queueUrls = new Set(queue.map((t) => t.originalUrl));
+    return suggestions.filter((s) => s.url && !queueUrls.has(s.url)).slice(0, 8);
+  }, [playlistRepeatMode, queue, suggestions, suggestionsEnabled]);
 
   const dockItems = useMemo(
     () => [
@@ -3134,7 +3282,7 @@ export default function AudioPlayerPage() {
             tabs={[
               {
                 id: 'queue',
-                label: `Tiếp (${queue.length})`,
+                label: `Tiếp (${queue.length + upcomingSuggestions.length})`,
                 icon: <ListMusic className="w-3.5 h-3.5 shrink-0" />,
               },
               {
@@ -3228,6 +3376,65 @@ export default function AudioPlayerPage() {
                     </SwipeToDeleteRow>
                   );
                 })
+              )}
+
+              {upcomingSuggestions.length > 0 && (
+                <div className="pt-2 space-y-2 border-t border-white/10">
+                  <div className="flex items-center justify-between gap-2 px-1">
+                    <span className="text-[12px] font-bold uppercase tracking-wider text-cyan-300/90">
+                      Gợi ý phát tiếp theo
+                    </span>
+                    <span className="text-[11.5px] text-white/55">
+                      Tự nối B → C → D
+                    </span>
+                  </div>
+                  {upcomingSuggestions.map((sItem, sIdx) => (
+                    <div
+                      key={`upnext_${sItem.id}_${sIdx}`}
+                      className="flex items-center gap-3 p-2.5 rounded-2xl bg-[#0b101d]/80 border border-white/10 hover:bg-white/10 transition"
+                    >
+                      <span className="w-5 text-center text-[12px] font-semibold text-cyan-300/75 tabular-nums shrink-0">
+                        {queue.length + sIdx + 1}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          playSuggestedTrack(
+                            sItem,
+                            true,
+                            upcomingSuggestions.slice(sIdx + 1)
+                          )
+                        }
+                        className="flex items-center gap-3 flex-1 min-w-0 text-left"
+                      >
+                        <img
+                          src={`/api/image-proxy?url=${encodeURIComponent(sItem.thumbnail)}`}
+                          alt={sItem.title}
+                          loading="lazy"
+                          decoding="async"
+                          className="w-11 h-11 rounded-xl object-cover bg-white/10 border border-white/15 shrink-0"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <p className="text-[15px] font-semibold text-white truncate">
+                            {sItem.title}
+                          </p>
+                          <p className="text-[12.5px] text-white/70 truncate">
+                            {sItem.author}
+                          </p>
+                        </div>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => playSuggestedTrack(sItem, false)}
+                        title="Ghìm vào hàng đợi"
+                        className="shrink-0 p-2 text-cyan-300/80 hover:text-cyan-200 transition"
+                      >
+                        <ListPlus className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
               )}
             </div>
           )}
@@ -3678,7 +3885,13 @@ export default function AudioPlayerPage() {
                         >
                           <button
                             type="button"
-                            onClick={() => playSuggestedTrack(item, true)}
+                            onClick={() =>
+                              playSuggestedTrack(
+                                item,
+                                true,
+                                isSearchMode ? undefined : activeList.slice(idx + 1)
+                              )
+                            }
                             className="flex items-center gap-3 flex-1 min-w-0 text-left"
                           >
                             <div className="relative shrink-0">
@@ -3742,16 +3955,46 @@ export default function AudioPlayerPage() {
         playsInline
         preload="auto"
         onPlay={() => {
+          userPausedRef.current = false;
           clearStallWatchdog();
+          clearUnexpectedPauseTimer();
           setIsPlaying(true);
         }}
         onPlaying={() => {
+          userPausedRef.current = false;
           clearStallWatchdog();
+          clearUnexpectedPauseTimer();
           recoveryAttemptsRef.current = 0;
         }}
         onPause={() => {
           clearStallWatchdog();
           setIsPlaying(false);
+          const audio = audioRef.current;
+          if (
+            audio &&
+            !userPausedRef.current &&
+            !isSwitchingTrackRef.current &&
+            !isRecoveringRef.current &&
+            !audio.ended &&
+            audio.src &&
+            audio.src !== SILENT_AUDIO_URI
+          ) {
+            clearUnexpectedPauseTimer();
+            unexpectedPauseTimerRef.current = setTimeout(() => {
+              const cur = audioRef.current;
+              if (
+                cur &&
+                !userPausedRef.current &&
+                !isSwitchingTrackRef.current &&
+                !isRecoveringRef.current &&
+                cur.paused &&
+                !cur.ended &&
+                (cur.error || cur.readyState < 3 || !navigator.onLine)
+              ) {
+                void recoverCurrentTrack();
+              }
+            }, 1000);
+          }
         }}
         onWaiting={startStallWatchdog}
         onStalled={startStallWatchdog}

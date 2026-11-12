@@ -16,7 +16,7 @@ const ALLOWED_AUDIO_HOSTS = [
   'muscdn.com',
 ];
 
-const MAX_CHUNK_BYTES = 1024 * 1024; // 1 MB mỗi đoạn Range (TTFB nhanh trên 5G, seek mượt & dưới giới hạn Vercel)
+const MAX_CHUNK_BYTES = 512 * 1024; // 512 KB mỗi đoạn Range -> truyền tải nhanh trên 5G, không bị Vercel timeout 10s giữa chừng
 
 function isAllowedAudioHost(rawUrl: string): boolean {
   try {
@@ -49,15 +49,18 @@ function clampRangeHeader(rawRange: string | null): string {
 }
 
 /**
- * Proxy stream audio hỗ trợ HTTP 206 Partial Content (Range).
+ * Proxy stream audio hỗ trợ HTTP 206 Partial Content (Range) & HEAD probe cho CoreMedia iOS.
  * Giúp iPhone 4G/5G phát được URL googlevideo.com vốn bị khóa theo IP máy chủ Vercel.
  */
-export async function GET(req: NextRequest) {
+async function handleAudioProxy(req: NextRequest, method: 'GET' | 'HEAD') {
   const targetUrl = req.nextUrl.searchParams.get('url');
 
   if (!targetUrl || !isAllowedAudioHost(targetUrl)) {
     return NextResponse.json({ error: 'Invalid audio stream URL.' }, { status: 400 });
   }
+
+  const headerAbort = new AbortController();
+  const headerTimer = setTimeout(() => headerAbort.abort(), 6500);
 
   try {
     const rangeHeader = clampRangeHeader(req.headers.get('range'));
@@ -75,10 +78,12 @@ export async function GET(req: NextRequest) {
     }
 
     const upstream = await fetch(targetUrl, {
+      method,
       headers,
       redirect: 'follow',
-      signal: AbortSignal.timeout(8500),
+      signal: headerAbort.signal,
     });
+    clearTimeout(headerTimer);
 
     if (!upstream.ok && upstream.status !== 206) {
       return NextResponse.json(
@@ -107,11 +112,20 @@ export async function GET(req: NextRequest) {
     resHeaders.set('Cache-Control', 'private, max-age=1800');
     resHeaders.set('Access-Control-Allow-Origin', '*');
 
-    return new NextResponse(upstream.body, {
+    return new NextResponse(method === 'HEAD' ? null : upstream.body, {
       status: upstream.status,
       headers: resHeaders,
     });
   } catch {
+    clearTimeout(headerTimer);
     return NextResponse.json({ error: 'Audio proxy timeout or failed.' }, { status: 502 });
   }
+}
+
+export async function GET(req: NextRequest) {
+  return handleAudioProxy(req, 'GET');
+}
+
+export async function HEAD(req: NextRequest) {
+  return handleAudioProxy(req, 'HEAD');
 }
