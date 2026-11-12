@@ -94,10 +94,10 @@ export function SlidingPillTabs<T extends string>({
                 selectByIndex((idx + delta + tabs.length) % tabs.length, true);
               }
             }}
-            className="u039-tab"
+            className={`u039-tab ${isSelected ? 'text-white font-bold' : 'text-white/85'}`}
           >
             {tab.icon}
-            <span className="truncate">{tab.label}</span>
+            <span className="truncate relative z-[2]">{tab.label}</span>
           </button>
         );
       })}

@@ -32,6 +32,7 @@ export function TiltingSeekSlider({
 
   const lastXRef = useRef(0);
   const lastTRef = useRef(0);
+  const dragStartRef = useRef<{ x: number; y: number; committed: boolean } | null>(null);
   const stillTimerRef = useRef<number | null>(null);
   const rmRef = useRef(false);
 
@@ -77,26 +78,34 @@ export function TiltingSeekSlider({
     return p * safeMax;
   };
 
-  const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+  const handleThumbPointerDown = (e: React.PointerEvent<HTMLSpanElement>) => {
     if (e.button !== 0 && e.pointerType === 'mouse') return;
     if (safeMax <= 0) return;
 
-    try {
-      e.currentTarget.setPointerCapture(e.pointerId);
-    } catch {}
-
-    setIsDragging(true);
+    dragStartRef.current = { x: e.clientX, y: e.clientY, committed: false };
     lastXRef.current = e.clientX;
     lastTRef.current = performance.now();
-
-    const next = valueFromClientX(e.clientX);
-    setDragValue(next);
-    onSeek(next);
-    thumbRef.current?.focus({ preventScroll: true });
   };
 
-  const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!isDragging || safeMax <= 0) return;
+  const handleThumbPointerMove = (e: React.PointerEvent<HTMLSpanElement>) => {
+    const start = dragStartRef.current;
+    if (!start || safeMax <= 0) return;
+
+    if (!start.committed) {
+      const dx = Math.abs(e.clientX - start.x);
+      const dy = Math.abs(e.clientY - start.y);
+      if (dy > 8 && dy > dx) {
+        dragStartRef.current = null;
+        return;
+      }
+      if (dx < 5 || dx <= dy) return;
+      start.committed = true;
+      setIsDragging(true);
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {}
+    }
+
     const now = performance.now();
     const vel = (e.clientX - lastXRef.current) / Math.max(8, now - lastTRef.current);
     lastXRef.current = e.clientX;
@@ -109,6 +118,7 @@ export function TiltingSeekSlider({
   };
 
   const finishDrag = () => {
+    dragStartRef.current = null;
     if (!isDragging) return;
     setIsDragging(false);
     setDragValue(null);
@@ -147,10 +157,6 @@ export function TiltingSeekSlider({
       <div
         ref={trackRef}
         className="u017-track"
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={finishDrag}
-        onPointerCancel={finishDrag}
       >
         <span className="u017-fill" aria-hidden="true" />
         <span
@@ -163,6 +169,10 @@ export function TiltingSeekSlider({
           aria-valuemax={Math.round(safeMax)}
           aria-valuenow={Math.round(clampedVal)}
           aria-valuetext={`${formattedCurrent} / ${formatTime(safeMax)}`}
+          onPointerDown={handleThumbPointerDown}
+          onPointerMove={handleThumbPointerMove}
+          onPointerUp={finishDrag}
+          onPointerCancel={finishDrag}
           onKeyDown={handleKeyDown}
         />
         <span ref={bubRef} className="u017-bub" aria-hidden="true">

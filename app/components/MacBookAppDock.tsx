@@ -18,10 +18,10 @@ interface MacBookAppDockProps {
   ariaLabel?: string;
 }
 
-const BASE_SIZE = 40;
-const MAX_SIZE = 60;
-const SPREAD_PX = 68;
-const GAP_PX = 10;
+const BASE_SIZE = 50;
+const MAX_SIZE = 74;
+const SPREAD_PX = 84;
+const GAP_PX = 14;
 
 /**
  * Thanh Dock kiểu MacBook (#208) nổi ở đáy màn hình:
@@ -208,8 +208,14 @@ export function MacBookAppDock({
                       <stop offset="0%" stopColor={item.gradFrom} />
                       <stop offset="100%" stopColor={item.gradTo} />
                     </linearGradient>
+                    <linearGradient id={`${gradId}_glass`} x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#ffffff" stopOpacity="0.34" />
+                      <stop offset="48%" stopColor="#ffffff" stopOpacity="0.06" />
+                      <stop offset="100%" stopColor="#000000" stopOpacity="0.14" />
+                    </linearGradient>
                   </defs>
                   <rect width="46" height="46" rx="12" fill={`url(#${gradId})`} />
+                  <rect width="46" height="46" rx="12" fill={`url(#${gradId}_glass)`} />
                   {item.iconPath}
                 </svg>
               </button>

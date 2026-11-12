@@ -135,6 +135,7 @@ export default function AudioPlayerPage() {
   const [swipeUndo, setSwipeUndo] = useState<
     | { type: 'queue'; item: TrackData; index: number; resetKey: number }
     | { type: 'playlistTrack'; playlistId: string; item: TrackData; index: number; resetKey: number }
+    | { type: 'historyTrack'; item: TrackData; index: number; resetKey: number }
     | null
   >(null);
   const undoResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1954,6 +1955,24 @@ export default function AudioPlayerPage() {
     removeTrackFromPlaylist(playlistId, track.id);
   };
 
+  const removeHistoryItemWithUndo = (idx: number) => {
+    const target = history[idx];
+    if (!target) return;
+    swipeResetSeqRef.current += 1;
+    setSwipeUndo({
+      type: 'historyTrack',
+      item: target,
+      index: idx,
+      resetKey: swipeResetSeqRef.current,
+    });
+
+    const updated = history.filter((_, i) => i !== idx);
+    setHistory(updated);
+    try {
+      localStorage.setItem(STORAGE_KEYS.HISTORY, JSON.stringify(updated));
+    } catch {}
+  };
+
   const handleUndoSwipeDelete = () => {
     if (!swipeUndo) return;
     if (swipeUndo.type === 'queue') {
@@ -1968,6 +1987,14 @@ export default function AudioPlayerPage() {
         setCurrentIndex(0);
       }
       showToast(`Đã khôi phục: ${swipeUndo.item.title}`);
+    } else if (swipeUndo.type === 'historyTrack') {
+      const restored = [...history];
+      restored.splice(Math.min(swipeUndo.index, restored.length), 0, swipeUndo.item);
+      setHistory(restored);
+      try {
+        localStorage.setItem(STORAGE_KEYS.HISTORY, JSON.stringify(restored));
+      } catch {}
+      showToast(`Đã đưa lại vào lịch sử: ${swipeUndo.item.title}`);
     } else {
       const updated = playlists.map((pl) => {
         if (pl.id !== swipeUndo.playlistId) return pl;
@@ -2367,7 +2394,7 @@ export default function AudioPlayerPage() {
         {/* ================= TRANG 0 (MẶC ĐỊNH): NGHE NHẠC ================= */}
         <section
           aria-label="Trang Nghe nhạc"
-          className="la-pager-page px-4 pt-[max(1rem,env(safe-area-inset-top))] pb-[max(9.5rem,calc(env(safe-area-inset-bottom)+8rem))] flex flex-col items-center"
+          className="la-pager-page px-4 pt-[max(1rem,env(safe-area-inset-top))] pb-[max(10.5rem,calc(env(safe-area-inset-bottom)+9rem))] flex flex-col items-center"
         >
           <div className="w-full max-w-[460px] space-y-4 my-1">
             {/* THANH TIÊU ĐỀ + GỢI Ý VUỐT PHẢI & CÀI ĐẶT */}
@@ -2389,11 +2416,11 @@ export default function AudioPlayerPage() {
                 <button
                   type="button"
                   onClick={() => goToPage('discover')}
-                  className="liquid-pill px-3 py-2 rounded-full flex items-center gap-1 text-[13px] font-semibold text-cyan-200 hover:text-white active:scale-95 transition"
+                  className="liquid-pill px-2.5 py-2 rounded-full flex items-center gap-1 text-[13px] font-semibold text-cyan-200 hover:text-white active:scale-95 transition"
                   title="Vuốt sang phải để tìm bài & xem gợi ý"
                 >
                   <Search className="w-3.5 h-3.5 text-cyan-300" />
-                  <span>Tìm kiếm</span>
+                  <span>Tìm</span>
                   <ChevronRight className="w-3.5 h-3.5 text-white/60" />
                 </button>
 
@@ -2555,9 +2582,7 @@ export default function AudioPlayerPage() {
               <WaveformVisualizer
                 isPlaying={isPlaying}
                 progressPct={progressPct}
-                currentTime={currentTime}
                 duration={duration}
-                onSeek={seekToTime}
               />
 
               <div className={`la-art-portal ${isPlaying ? 'is-playing' : ''}`}>
@@ -2833,7 +2858,7 @@ export default function AudioPlayerPage() {
                           type="button"
                           onClick={() => setTrackToAddPlaylist(item)}
                           title="Lưu vào Playlist"
-                          className="p-2 text-white/55 hover:text-cyan-300 transition"
+                          className="shrink-0 p-2 text-white/60 hover:text-cyan-300 transition"
                         >
                           <FolderPlus className="w-4 h-4" />
                         </button>
@@ -2842,7 +2867,7 @@ export default function AudioPlayerPage() {
                           type="button"
                           onClick={() => removeQueueItemWithUndo(idx)}
                           title="Xóa khỏi hàng đợi"
-                          className="p-2 text-white/45 hover:text-rose-300 transition"
+                          className="shrink-0 p-2 text-rose-300/80 hover:text-rose-200 transition"
                         >
                           <Trash2 className="w-4 h-4" />
                         </button>
@@ -2973,7 +2998,7 @@ export default function AudioPlayerPage() {
                               onClick={() =>
                                 removePlaylistTrackWithUndo(selectedPlaylist.id, item, idx)
                               }
-                              className="p-2 text-white/45 hover:text-rose-300"
+                              className="shrink-0 p-2 text-rose-300/80 hover:text-rose-200 transition"
                               title="Xóa khỏi Playlist"
                             >
                               <Trash2 className="w-4 h-4" />
@@ -3016,54 +3041,67 @@ export default function AudioPlayerPage() {
                     />
                   </div>
                   {history.map((item, idx) => (
-                    <div
-                      key={item.id}
-                      className="flex items-center gap-3 p-2.5 rounded-2xl bg-white/5 border border-white/10 hover:bg-white/10 transition"
+                    <SwipeToDeleteRow
+                      key={`${item.id}_${idx}`}
+                      ariaLabel={`${item.title} - ${item.author}. Vuốt trái hoặc bấm thùng rác để xóa khỏi lịch sử`}
+                      onDelete={() => removeHistoryItemWithUndo(idx)}
                     >
-                      <span className="w-5 text-center text-[13px] font-semibold text-white/55 tabular-nums shrink-0">
-                        {idx + 1}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => playFromSavedTrack(item, true)}
-                        className="flex items-center gap-3 flex-1 min-w-0 text-left"
-                      >
-                        <img
-                          src={`/api/image-proxy?url=${encodeURIComponent(item.thumbnail)}`}
-                          alt={item.title}
-                          className="w-12 h-12 rounded-xl object-cover bg-white/10 border border-white/15 shrink-0"
-                        />
-                        <div className="min-w-0 flex-1">
-                          <p className="text-[15.5px] font-semibold text-white truncate">
-                            {item.title}
-                          </p>
-                          <p className="text-[13px] text-white/70 truncate">
-                            {item.author} •{' '}
-                            <span className="uppercase text-[11px] font-bold text-cyan-300">
-                              {item.source}
-                            </span>
-                          </p>
-                        </div>
-                      </button>
+                      <div className="flex items-center gap-2 p-2.5 rounded-2xl bg-[#0b101d]/95 border border-white/10 hover:bg-white/10 transition">
+                        <span className="w-5 text-center text-[13px] font-semibold text-white/55 tabular-nums shrink-0">
+                          {idx + 1}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => playFromSavedTrack(item, true)}
+                          className="flex items-center gap-2.5 flex-1 min-w-0 text-left"
+                        >
+                          <img
+                            src={`/api/image-proxy?url=${encodeURIComponent(item.thumbnail)}`}
+                            alt={item.title}
+                            className="w-11 h-11 rounded-xl object-cover bg-white/10 border border-white/15 shrink-0"
+                          />
+                          <div className="min-w-0 flex-1">
+                            <p className="text-[15px] font-semibold text-white truncate">
+                              {item.title}
+                            </p>
+                            <p className="text-[12.5px] text-white/70 truncate">
+                              {item.author} •{' '}
+                              <span className="uppercase text-[11px] font-bold text-cyan-300">
+                                {item.source}
+                              </span>
+                            </p>
+                          </div>
+                        </button>
 
-                      <button
-                        type="button"
-                        onClick={() => playFromSavedTrack(item, false)}
-                        title="Thêm vào Tiếp theo"
-                        className="liquid-btn p-2 rounded-full text-cyan-300"
-                      >
-                        <ListPlus className="w-4 h-4" />
-                      </button>
+                        <button
+                          type="button"
+                          onClick={() => playFromSavedTrack(item, false)}
+                          title="Thêm vào Tiếp theo"
+                          className="liquid-btn shrink-0 p-2 rounded-full text-cyan-300"
+                        >
+                          <ListPlus className="w-4 h-4" />
+                        </button>
 
-                      <button
-                        type="button"
-                        onClick={() => setTrackToAddPlaylist(item)}
-                        title="Lưu vào Playlist"
-                        className="liquid-btn p-2 rounded-full text-pink-300"
-                      >
-                        <FolderPlus className="w-4 h-4" />
-                      </button>
-                    </div>
+                        <button
+                          type="button"
+                          onClick={() => setTrackToAddPlaylist(item)}
+                          title="Lưu vào Playlist"
+                          className="liquid-btn shrink-0 p-2 rounded-full text-pink-300"
+                        >
+                          <FolderPlus className="w-4 h-4" />
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => removeHistoryItemWithUndo(idx)}
+                          title="Xóa bài này khỏi lịch sử"
+                          aria-label={`Xóa ${item.title} khỏi lịch sử`}
+                          className="shrink-0 p-2 rounded-full bg-rose-500/15 border border-rose-400/30 text-rose-300 hover:bg-rose-500/30 active:scale-95 transition"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </SwipeToDeleteRow>
                   ))}
                 </>
               )}
@@ -3414,13 +3452,13 @@ export default function AudioPlayerPage() {
         onNextTrack={handleNextTrack}
       />
 
-      {/* THANH DOCK KIỂU MACBOOK PHÓNG TO KHI RÊ / LƯỚT NGÓN TAY (#208) */}
+      {/* THANH DOCK KIỂU MACBOOK LIQUID GLASS PHÓNG TO KHI RÊ / LƯỚT NGÓN TAY (#208) */}
       <MacBookAppDock
         items={[
           {
             id: 'player',
             label: 'Nghe nhạc',
-            isActive: activePage === 'player' && activeTab !== 'playlists',
+            isActive: activePage === 'player',
             gradFrom: '#22d3ee',
             gradTo: '#6366f1',
             iconPath: (
@@ -3467,41 +3505,6 @@ export default function AudioPlayerPage() {
             ),
             onSelect: () => {
               goToPage('discover');
-            },
-          },
-          {
-            id: 'playlists',
-            label: 'Playlist',
-            isActive: activePage === 'player' && activeTab === 'playlists',
-            gradFrom: '#a855f7',
-            gradTo: '#10b981',
-            iconPath: (
-              <>
-                <rect
-                  x="11"
-                  y="14"
-                  width="24"
-                  height="18"
-                  rx="4"
-                  fill="none"
-                  stroke="#fff"
-                  strokeWidth="2.6"
-                />
-                <path
-                  d="M16 20h14M16 25.5h9"
-                  stroke="#fff"
-                  strokeWidth="2.6"
-                  strokeLinecap="round"
-                />
-              </>
-            ),
-            onSelect: () => {
-              setTabDirection(1);
-              setActiveTab('playlists');
-              goToPage('player');
-              setTimeout(() => {
-                libraryCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-              }, 220);
             },
           },
           {
