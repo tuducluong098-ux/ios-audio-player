@@ -23,77 +23,77 @@ export const WALLPAPER_PRESETS: WallpaperPreset[] = [
     id: 'aurora',
     label: 'Cực quang',
     swatch: 'linear-gradient(135deg, #06b6d4 0%, #6366f1 52%, #ec4899 100%)',
-    baseColor: '#050816',
+    baseColor: '#060a1e',
     meshBackground:
-      'radial-gradient(120% 80% at 15% 8%, rgba(34,211,238,0.28) 0%, transparent 56%), radial-gradient(110% 75% at 88% 22%, rgba(236,72,153,0.24) 0%, transparent 54%), radial-gradient(125% 85% at 50% 96%, rgba(99,102,241,0.34) 0%, transparent 62%)',
+      'radial-gradient(125% 85% at 12% 10%, rgba(34,211,238,0.42) 0%, transparent 58%), radial-gradient(115% 80% at 90% 22%, rgba(236,72,153,0.38) 0%, transparent 56%), radial-gradient(130% 90% at 50% 96%, rgba(99,102,241,0.46) 0%, transparent 64%)',
     ribbonOne:
-      'linear-gradient(118deg, transparent 15%, rgba(34,211,238,0.28) 38%, rgba(129,140,248,0.32) 55%, rgba(236,72,153,0.24) 74%, transparent 90%)',
+      'linear-gradient(118deg, transparent 10%, rgba(34,211,238,0.38) 36%, rgba(129,140,248,0.42) 55%, rgba(236,72,153,0.34) 76%, transparent 92%)',
     ribbonTwo:
-      'linear-gradient(245deg, transparent 18%, rgba(56,189,248,0.22) 42%, rgba(168,85,247,0.26) 62%, transparent 86%)',
+      'linear-gradient(245deg, transparent 14%, rgba(56,189,248,0.3) 40%, rgba(168,85,247,0.34) 62%, transparent 88%)',
     orbTopLeft:
-      'radial-gradient(circle, rgba(34,211,238,0.34) 0%, rgba(56,189,248,0.12) 46%, transparent 74%)',
+      'radial-gradient(circle, rgba(34,211,238,0.46) 0%, rgba(56,189,248,0.18) 46%, transparent 74%)',
     orbRight:
-      'radial-gradient(circle, rgba(236,72,153,0.3) 0%, rgba(192,132,252,0.1) 46%, transparent 74%)',
+      'radial-gradient(circle, rgba(236,72,153,0.42) 0%, rgba(192,132,252,0.15) 46%, transparent 74%)',
     orbBottom:
-      'radial-gradient(circle, rgba(129,140,248,0.32) 0%, rgba(79,70,229,0.1) 46%, transparent 74%)',
-    starColor: 'rgba(186, 230, 253, 0.85)',
+      'radial-gradient(circle, rgba(129,140,248,0.44) 0%, rgba(79,70,229,0.16) 46%, transparent 74%)',
+    starColor: 'rgba(186, 230, 253, 0.92)',
   },
   {
     id: 'cosmos',
     label: 'Ngân hà',
     swatch: 'linear-gradient(135deg, #8b5cf6 0%, #d946ef 55%, #38bdf8 100%)',
-    baseColor: '#090617',
+    baseColor: '#0c0720',
     meshBackground:
-      'radial-gradient(120% 80% at 22% 10%, rgba(168,85,247,0.34) 0%, transparent 58%), radial-gradient(110% 80% at 86% 28%, rgba(232,121,249,0.26) 0%, transparent 56%), radial-gradient(125% 85% at 45% 94%, rgba(59,130,246,0.28) 0%, transparent 62%)',
+      'radial-gradient(125% 85% at 18% 10%, rgba(168,85,247,0.46) 0%, transparent 58%), radial-gradient(115% 80% at 88% 26%, rgba(232,121,249,0.38) 0%, transparent 58%), radial-gradient(130% 90% at 45% 94%, rgba(59,130,246,0.4) 0%, transparent 64%)',
     ribbonOne:
-      'linear-gradient(124deg, transparent 16%, rgba(168,85,247,0.3) 40%, rgba(236,72,153,0.26) 60%, rgba(56,189,248,0.2) 78%, transparent 92%)',
+      'linear-gradient(124deg, transparent 12%, rgba(168,85,247,0.4) 38%, rgba(236,72,153,0.36) 58%, rgba(56,189,248,0.28) 78%, transparent 92%)',
     ribbonTwo:
-      'linear-gradient(238deg, transparent 18%, rgba(192,132,252,0.24) 45%, rgba(99,102,241,0.26) 66%, transparent 88%)',
+      'linear-gradient(238deg, transparent 14%, rgba(192,132,252,0.32) 44%, rgba(99,102,241,0.34) 66%, transparent 88%)',
     orbTopLeft:
-      'radial-gradient(circle, rgba(168,85,247,0.36) 0%, rgba(139,92,246,0.12) 46%, transparent 74%)',
+      'radial-gradient(circle, rgba(168,85,247,0.48) 0%, rgba(139,92,246,0.18) 46%, transparent 74%)',
     orbRight:
-      'radial-gradient(circle, rgba(244,114,182,0.3) 0%, rgba(217,70,239,0.1) 46%, transparent 74%)',
+      'radial-gradient(circle, rgba(244,114,182,0.42) 0%, rgba(217,70,239,0.16) 46%, transparent 74%)',
     orbBottom:
-      'radial-gradient(circle, rgba(56,189,248,0.28) 0%, rgba(99,102,241,0.1) 46%, transparent 74%)',
-    starColor: 'rgba(245, 208, 254, 0.88)',
+      'radial-gradient(circle, rgba(56,189,248,0.38) 0%, rgba(99,102,241,0.15) 46%, transparent 74%)',
+    starColor: 'rgba(245, 208, 254, 0.94)',
   },
   {
     id: 'ocean',
     label: 'Biển đêm',
     swatch: 'linear-gradient(135deg, #0ea5e9 0%, #14b8a6 55%, #1d4ed8 100%)',
-    baseColor: '#040b17',
+    baseColor: '#040e1f',
     meshBackground:
-      'radial-gradient(120% 85% at 18% 12%, rgba(14,165,233,0.32) 0%, transparent 58%), radial-gradient(110% 80% at 88% 26%, rgba(20,184,166,0.26) 0%, transparent 56%), radial-gradient(125% 85% at 50% 95%, rgba(37,99,235,0.32) 0%, transparent 64%)',
+      'radial-gradient(125% 85% at 16% 10%, rgba(14,165,233,0.44) 0%, transparent 58%), radial-gradient(115% 80% at 88% 26%, rgba(20,184,166,0.38) 0%, transparent 58%), radial-gradient(130% 90% at 50% 95%, rgba(37,99,235,0.44) 0%, transparent 64%)',
     ribbonOne:
-      'linear-gradient(116deg, transparent 15%, rgba(45,212,191,0.26) 40%, rgba(56,189,248,0.28) 60%, rgba(59,130,246,0.22) 78%, transparent 92%)',
+      'linear-gradient(116deg, transparent 12%, rgba(45,212,191,0.36) 38%, rgba(56,189,248,0.4) 60%, rgba(59,130,246,0.3) 78%, transparent 92%)',
     ribbonTwo:
-      'linear-gradient(242deg, transparent 20%, rgba(34,211,238,0.22) 44%, rgba(16,185,129,0.22) 64%, transparent 88%)',
+      'linear-gradient(242deg, transparent 16%, rgba(34,211,238,0.32) 44%, rgba(16,185,129,0.3) 64%, transparent 88%)',
     orbTopLeft:
-      'radial-gradient(circle, rgba(34,211,238,0.34) 0%, rgba(14,165,233,0.12) 46%, transparent 74%)',
+      'radial-gradient(circle, rgba(34,211,238,0.46) 0%, rgba(14,165,233,0.18) 46%, transparent 74%)',
     orbRight:
-      'radial-gradient(circle, rgba(45,212,191,0.3) 0%, rgba(20,184,166,0.1) 46%, transparent 74%)',
+      'radial-gradient(circle, rgba(45,212,191,0.42) 0%, rgba(20,184,166,0.16) 46%, transparent 74%)',
     orbBottom:
-      'radial-gradient(circle, rgba(59,130,246,0.34) 0%, rgba(37,99,235,0.12) 46%, transparent 74%)',
-    starColor: 'rgba(165, 243, 252, 0.85)',
+      'radial-gradient(circle, rgba(59,130,246,0.46) 0%, rgba(37,99,235,0.18) 46%, transparent 74%)',
+    starColor: 'rgba(165, 243, 252, 0.92)',
   },
   {
     id: 'sunset',
     label: 'Hoàng hôn',
     swatch: 'linear-gradient(135deg, #f97316 0%, #ec4899 52%, #7c3aed 100%)',
-    baseColor: '#120714',
+    baseColor: '#160819',
     meshBackground:
-      'radial-gradient(120% 80% at 18% 12%, rgba(251,146,60,0.26) 0%, transparent 56%), radial-gradient(110% 80% at 88% 24%, rgba(236,72,153,0.3) 0%, transparent 56%), radial-gradient(125% 85% at 48% 95%, rgba(139,92,246,0.3) 0%, transparent 62%)',
+      'radial-gradient(125% 85% at 16% 12%, rgba(251,146,60,0.38) 0%, transparent 58%), radial-gradient(115% 80% at 88% 24%, rgba(236,72,153,0.42) 0%, transparent 58%), radial-gradient(130% 90% at 48% 95%, rgba(139,92,246,0.42) 0%, transparent 64%)',
     ribbonOne:
-      'linear-gradient(120deg, transparent 16%, rgba(251,146,60,0.24) 38%, rgba(244,63,94,0.28) 58%, rgba(168,85,247,0.24) 78%, transparent 92%)',
+      'linear-gradient(120deg, transparent 12%, rgba(251,146,60,0.34) 38%, rgba(244,63,94,0.38) 58%, rgba(168,85,247,0.32) 78%, transparent 92%)',
     ribbonTwo:
-      'linear-gradient(246deg, transparent 18%, rgba(251,191,36,0.18) 42%, rgba(236,72,153,0.24) 64%, transparent 88%)',
+      'linear-gradient(246deg, transparent 14%, rgba(251,191,36,0.26) 42%, rgba(236,72,153,0.32) 64%, transparent 88%)',
     orbTopLeft:
-      'radial-gradient(circle, rgba(251,146,60,0.3) 0%, rgba(244,63,94,0.1) 46%, transparent 74%)',
+      'radial-gradient(circle, rgba(251,146,60,0.42) 0%, rgba(244,63,94,0.16) 46%, transparent 74%)',
     orbRight:
-      'radial-gradient(circle, rgba(236,72,153,0.34) 0%, rgba(217,70,239,0.1) 46%, transparent 74%)',
+      'radial-gradient(circle, rgba(236,72,153,0.46) 0%, rgba(217,70,239,0.16) 46%, transparent 74%)',
     orbBottom:
-      'radial-gradient(circle, rgba(139,92,246,0.3) 0%, rgba(124,58,237,0.1) 46%, transparent 74%)',
-    starColor: 'rgba(254, 215, 170, 0.85)',
+      'radial-gradient(circle, rgba(139,92,246,0.42) 0%, rgba(124,58,237,0.16) 46%, transparent 74%)',
+    starColor: 'rgba(254, 215, 170, 0.92)',
   },
   {
     id: 'minimal',
@@ -226,7 +226,7 @@ export const AmbientWallpaper = React.memo(function AmbientWallpaper({
           background:
             theme === 'minimal'
               ? 'linear-gradient(180deg, rgba(4,6,12,0.45) 0%, rgba(4,6,12,0.58) 50%, rgba(4,6,12,0.92) 100%)'
-              : 'linear-gradient(180deg, rgba(5,8,20,0.34) 0%, rgba(5,8,20,0.22) 45%, rgba(5,8,20,0.78) 100%)',
+              : 'linear-gradient(180deg, rgba(5,8,20,0.22) 0%, rgba(5,8,20,0.12) 45%, rgba(5,8,20,0.58) 100%)',
         }}
       />
     </div>

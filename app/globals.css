@@ -276,13 +276,13 @@ input[type="range"].apple-slider:active::-webkit-slider-thumb {
 }
 
 .la-aurora-ribbon.is-primary {
-  top: -12%;
-  height: 48%;
+  top: -8%;
+  height: 62%;
 }
 
 .la-aurora-ribbon.is-secondary {
-  bottom: -14%;
-  height: 44%;
+  bottom: -10%;
+  height: 58%;
   animation-duration: 24s;
   animation-direction: reverse;
 }
