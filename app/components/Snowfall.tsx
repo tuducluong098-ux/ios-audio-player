@@ -9,16 +9,23 @@ interface Snowflake {
   duration: string;
   delay: string;
   sway: string;
+  tint: string;
 }
 
-// 16 hạt ánh sáng tuyết nhẹ (pure radial-gradient + GPU translate3d, không boxShadow/blur gây lag iOS)
-const SNOWFLAKES: Snowflake[] = Array.from({ length: 16 }, (_, i) => {
+// 18 hạt ánh sáng tuyết/bụi sao nhẹ (pure radial-gradient + GPU translate3d, không boxShadow/blur gây lag iOS)
+const SNOWFLAKES: Snowflake[] = Array.from({ length: 18 }, (_, i) => {
   const seed = (i * 41 + 9) % 96 + 2;
   const size = 4 + ((i * 19) % 5);
-  const opacity = Number((0.28 + (((i * 23) % 36) / 100)).toFixed(2));
-  const duration = `${(11 + ((i * 7) % 10)).toFixed(1)}s`;
-  const delay = `-${((i * 1.9) % 16).toFixed(1)}s`;
+  const opacity = Number((0.26 + (((i * 23) % 36) / 100)).toFixed(2));
+  const duration = `${(11.5 + ((i * 7) % 10)).toFixed(1)}s`;
+  const delay = `-${((i * 1.9) % 17).toFixed(1)}s`;
   const sway = `${(i % 2 === 0 ? 1 : -1) * (10 + ((i * 5) % 14))}px`;
+  const tint =
+    i % 3 === 0
+      ? 'radial-gradient(circle, rgba(255,255,255,0.95) 0%, rgba(103,232,249,0.48) 45%, transparent 72%)'
+      : i % 3 === 1
+      ? 'radial-gradient(circle, rgba(255,255,255,0.92) 0%, rgba(192,132,252,0.44) 45%, transparent 72%)'
+      : 'radial-gradient(circle, rgba(255,255,255,0.9) 0%, rgba(244,114,182,0.42) 45%, transparent 72%)';
 
   return {
     left: `${seed}%`,
@@ -27,6 +34,7 @@ const SNOWFLAKES: Snowflake[] = Array.from({ length: 16 }, (_, i) => {
     duration,
     delay,
     sway,
+    tint,
   };
 });
 
@@ -50,8 +58,7 @@ export const Snowfall = React.memo(function Snowfall() {
               width: `${flake.size}px`,
               height: `${flake.size}px`,
               opacity: flake.opacity,
-              background:
-                'radial-gradient(circle, rgba(255,255,255,0.95) 0%, rgba(103,232,249,0.45) 45%, transparent 72%)',
+              background: flake.tint,
               animationDuration: flake.duration,
               animationDelay: flake.delay,
               '--snow-sway': flake.sway,

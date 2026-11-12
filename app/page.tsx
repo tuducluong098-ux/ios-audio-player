@@ -36,6 +36,7 @@ import Hls from 'hls.js';
 import { AppleSpinner } from './components/AppleSpinner';
 import { CircularTimerModal } from './components/CircularTimerModal';
 import { Snowfall } from './components/Snowfall';
+import { AmbientWallpaper, WALLPAPER_PRESETS, type WallpaperTheme } from './components/AmbientWallpaper';
 import { WaveformVisualizer } from './components/WaveformVisualizer';
 import { SettingsModal } from './components/SettingsModal';
 import { PlayPauseMorphOrb } from './components/PlayPauseMorphOrb';
@@ -103,6 +104,7 @@ const STORAGE_KEYS = {
   LOCK_MODE: 'ios_audio_lock_mode_v1',
   SYNC_AUTH: 'ios_audio_sync_auth_v1',
   SUGGESTIONS_ENABLED: 'ios_audio_suggestions_v1',
+  WALLPAPER_THEME: 'ios_audio_wallpaper_v1',
 };
 
 interface SyncSession {
@@ -187,6 +189,7 @@ export default function AudioPlayerPage() {
 
   // Chế độ nút trên Dynamic Island / Lock Screen (nằm trong Cài đặt)
   const [lockScreenControlMode, setLockScreenControlMode] = useState<'track' | 'seek'>('track');
+  const [wallpaperTheme, setWallpaperTheme] = useState<WallpaperTheme>('aurora');
 
   // Trạng thái Đồng bộ Cloud (Upstash Redis + Tên & PIN 4 số)
   const [syncSession, setSyncSession] = useState<SyncSession | null>(null);
@@ -464,6 +467,14 @@ export default function AudioPlayerPage() {
       const savedSuggestionsEnabled = localStorage.getItem(STORAGE_KEYS.SUGGESTIONS_ENABLED);
       if (savedSuggestionsEnabled !== null) {
         setSuggestionsEnabled(savedSuggestionsEnabled !== 'false');
+      }
+
+      const savedWallpaper = localStorage.getItem(STORAGE_KEYS.WALLPAPER_THEME);
+      if (
+        savedWallpaper &&
+        WALLPAPER_PRESETS.some((item) => item.id === savedWallpaper)
+      ) {
+        setWallpaperTheme(savedWallpaper as WallpaperTheme);
       }
 
       const savedSync = localStorage.getItem(STORAGE_KEYS.SYNC_AUTH);
@@ -2669,42 +2680,12 @@ export default function AudioPlayerPage() {
 
   return (
     <main className="relative h-[100dvh] w-full overflow-hidden flex flex-col">
-      {/* NỀN NEON LIQUID GLASS (RADIAL GRADIENT THUẦN GPU, KHÔNG BLUR NẶNG GÂY LAG iOS) */}
-      <div className="fixed inset-0 -z-10 overflow-hidden bg-[#05070e] pointer-events-none">
-        <div
-          className="animate-orb-slow absolute -top-28 -left-28 w-[26rem] h-[26rem] rounded-full will-change-transform"
-          style={{
-            background:
-              'radial-gradient(circle, rgba(34,211,238,0.22) 0%, rgba(34,211,238,0.06) 45%, transparent 72%)',
-          }}
-        />
-        <div
-          className="animate-orb-reverse absolute top-1/4 -right-28 w-[26rem] h-[26rem] rounded-full will-change-transform"
-          style={{
-            background:
-              'radial-gradient(circle, rgba(236,72,153,0.2) 0%, rgba(236,72,153,0.05) 45%, transparent 72%)',
-          }}
-        />
-        <div
-          className="animate-orb-slow absolute -bottom-32 left-1/4 w-[26rem] h-[26rem] rounded-full will-change-transform"
-          style={{
-            background:
-              'radial-gradient(circle, rgba(129,140,248,0.2) 0%, rgba(129,140,248,0.05) 45%, transparent 72%)',
-          }}
-        />
-
-        {currentTrack && (
-          <img
-            src={`/api/image-proxy?url=${encodeURIComponent(currentTrack.thumbnail)}`}
-            alt=""
-            aria-hidden="true"
-            loading="lazy"
-            decoding="async"
-            className="la-ambient-backdrop"
-          />
-        )}
-        <div className="absolute inset-0 bg-gradient-to-b from-[#05070e]/55 via-[#05070e]/45 to-[#05070e]/90" />
-      </div>
+      {/* NỀN NEON LIQUID GLASS ĐA TẦNG (THUẦN GPU, 5 CHỦ ĐỀ CỰC QUANG / NGÂN HÀ / BIỂN ĐÊM / HOÀNG HÔN / OLED) */}
+      <AmbientWallpaper
+        theme={wallpaperTheme}
+        thumbnailUrl={currentTrack?.thumbnail}
+        isPlaying={isPlaying}
+      />
 
       {/* HIỆU ỨNG TUYẾT RƠI NHÈ NHẸ */}
       <Snowfall />
@@ -2833,6 +2814,13 @@ export default function AudioPlayerPage() {
         onLogoutSync={handleLogoutSync}
         suggestionsEnabled={suggestionsEnabled}
         onToggleSuggestions={handleToggleSuggestions}
+        wallpaperTheme={wallpaperTheme}
+        onChangeWallpaperTheme={(nextTheme) => {
+          setWallpaperTheme(nextTheme);
+          try {
+            localStorage.setItem(STORAGE_KEYS.WALLPAPER_THEME, nextTheme);
+          } catch {}
+        }}
       />
 
       {/* POPUP ĐỒNG HỒ ĐẾM NGƯỢC 1 TIẾNG (DI TAY KÉO 1-60 PHÚT) */}
@@ -3028,9 +3016,9 @@ export default function AudioPlayerPage() {
         {/* KHỐI 2: NOW PLAYING CARD (SÓNG ÂM + HỆ HÀO QUANG + PLAY MORPH #007 + GLOW #228) */}
         {currentTrack && (
           <CursorGlowCard ref={nowPlayingCardRef} className="p-5 space-y-4">
-            {/* Header Now Playing */}
+            {/* Header Now Playing (chuyển mượt kiểu Apple Music khi đổi bài) */}
             <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0 flex-1 space-y-1">
+              <div key={currentTrack.id} className="la-track-enter min-w-0 flex-1 space-y-1">
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-xs font-bold uppercase tracking-[0.12em] text-cyan-300/95">
                     NOW PLAYING
@@ -3083,7 +3071,7 @@ export default function AudioPlayerPage() {
                 duration={duration}
               />
 
-              <div className={`la-art-portal ${isPlaying ? 'is-playing' : ''}`}>
+              <div key={`art_${currentTrack.id}`} className={`la-track-enter la-art-portal ${isPlaying ? 'is-playing' : ''}`}>
                 <span className="la-sonar-ring" aria-hidden="true" />
                 <span className="la-sonar-ring is-second" aria-hidden="true" />
                 <div className="la-art-aura" aria-hidden="true" />

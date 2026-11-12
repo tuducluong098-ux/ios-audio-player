@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { StretchySwitch } from './StretchySwitch';
 import { LiquidGlassButton } from './LiquidGlassButton';
+import { WALLPAPER_PRESETS, type WallpaperTheme } from './AmbientWallpaper';
 
 interface SyncSession {
   username: string;
@@ -48,6 +49,9 @@ interface SettingsModalProps {
   // Bật / tắt tính năng Gợi ý bài hát liên quan
   suggestionsEnabled: boolean;
   onToggleSuggestions: (enabled: boolean) => void;
+  // Chọn giao diện nền Neon Liquid Glass
+  wallpaperTheme: WallpaperTheme;
+  onChangeWallpaperTheme: (theme: WallpaperTheme) => void;
 }
 
 /**
@@ -75,6 +79,8 @@ export function SettingsModal({
   onLogoutSync,
   suggestionsEnabled,
   onToggleSuggestions,
+  wallpaperTheme,
+  onChangeWallpaperTheme,
 }: SettingsModalProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [usernameInput, setUsernameInput] = useState('');
@@ -336,6 +342,48 @@ export function SettingsModal({
             onChange={onToggleSuggestions}
             ariaLabel="Bật hoặc tắt Gợi ý và Tự phát tiếp"
           />
+        </div>
+
+        {/* 2C. Hình nền không gian Neon Liquid Glass */}
+        <div className="p-4 rounded-2xl bg-[#131b2e]/90 border border-white/15 space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-[15.5px] font-semibold text-white">
+              Hình nền không gian
+            </span>
+            <span className="text-xs text-cyan-300 font-medium">60fps GPU</span>
+          </div>
+          <div className="grid grid-cols-5 gap-2">
+            {WALLPAPER_PRESETS.map((preset) => {
+              const active = wallpaperTheme === preset.id;
+              return (
+                <button
+                  key={preset.id}
+                  type="button"
+                  onClick={() => onChangeWallpaperTheme(preset.id)}
+                  aria-pressed={active}
+                  className="flex flex-col items-center gap-1.5 group focus:outline-none"
+                >
+                  <span
+                    style={{ background: preset.swatch }}
+                    className={`w-full aspect-square rounded-2xl border-2 transition-all duration-200 flex items-center justify-center ${
+                      active
+                        ? 'border-white scale-105 shadow-[0_0_16px_rgba(34,211,238,0.45)]'
+                        : 'border-white/20 opacity-75 group-hover:opacity-100'
+                    }`}
+                  >
+                    {active && <span className="w-2 h-2 rounded-full bg-white shadow" />}
+                  </span>
+                  <span
+                    className={`text-[11px] font-semibold leading-tight text-center ${
+                      active ? 'text-cyan-200' : 'text-white/65'
+                    }`}
+                  >
+                    {preset.label}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
         </div>
 
         {/* 3. Thanh Âm lượng */}

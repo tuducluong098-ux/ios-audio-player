@@ -71,7 +71,11 @@
 @keyframes la-sheet-spring {
   0% {
     opacity: 0;
-    transform: translate3d(0, 22px, 0) scale(0.93);
+    transform: translate3d(0, 26px, 0) scale(0.92);
+  }
+  70% {
+    opacity: 1;
+    transform: translate3d(0, -2px, 0) scale(1.008);
   }
   100% {
     opacity: 1;
@@ -80,11 +84,11 @@
 }
 
 .la-modal-backdrop {
-  animation: la-backdrop-in 200ms var(--ux-ease) both;
+  animation: la-backdrop-in 220ms var(--ux-ease) both;
 }
 
 .la-modal-sheet {
-  animation: la-sheet-spring 360ms cubic-bezier(0.22, 1.28, 0.36, 1) both;
+  animation: la-sheet-spring 400ms cubic-bezier(0.22, 1.24, 0.36, 1) both;
   will-change: transform, opacity;
 }
 
@@ -214,9 +218,8 @@
   gap: 0.5rem;
   white-space: nowrap;
   transition:
-    opacity 0.3s var(--ux-ease),
-    transform 0.48s var(--ux-ease),
-    filter 0.35s var(--ux-ease);
+    opacity 0.28s var(--ux-ease),
+    transform 0.44s var(--ux-spring);
 }
 
 .u001-done {
@@ -231,13 +234,11 @@
   color: #ffffff;
   white-space: nowrap;
   opacity: 0;
-  transform: translate3d(0, 12px, 0);
-  filter: blur(4px);
+  transform: translate3d(0, 12px, 0) scale(0.94);
   pointer-events: none;
   transition:
-    opacity 0.32s var(--ux-ease),
-    transform 0.5s var(--ux-ease),
-    filter 0.38s var(--ux-ease);
+    opacity 0.28s var(--ux-ease),
+    transform 0.46s var(--ux-spring);
 }
 
 .u001-done b {
@@ -279,8 +280,7 @@
 .u001-btn[data-state="load"] .u001-content,
 .u001-btn[data-state="ok"] .u001-content {
   opacity: 0;
-  transform: translate3d(0, -12px, 0);
-  filter: blur(4px);
+  transform: translate3d(0, -10px, 0) scale(0.94);
 }
 
 .u001-btn[data-state="ok"] {
@@ -292,8 +292,7 @@
 
 .u001-btn[data-state="ok"] .u001-done {
   opacity: 1;
-  transform: translate3d(0, 0, 0);
-  filter: none;
+  transform: translate3d(0, 0, 0) scale(1);
 }
 
 .u001-btn[data-state="ok"] .u001-done path {
@@ -769,8 +768,8 @@
 
 @keyframes u039-enter-right {
   from {
-    opacity: 1;
-    transform: translate3d(12px, 0, 0);
+    opacity: 0.55;
+    transform: translate3d(14px, 0, 0);
   }
   to {
     opacity: 1;
@@ -780,8 +779,8 @@
 
 @keyframes u039-enter-left {
   from {
-    opacity: 1;
-    transform: translate3d(-12px, 0, 0);
+    opacity: 0.55;
+    transform: translate3d(-14px, 0, 0);
   }
   to {
     opacity: 1;
@@ -790,31 +789,34 @@
 }
 
 .u039-panel-right {
-  animation: u039-enter-right 0.24s var(--ux-ease) both;
+  animation: u039-enter-right 0.28s var(--ux-spring) both;
 }
 
 .u039-panel-left {
-  animation: u039-enter-left 0.24s var(--ux-ease) both;
+  animation: u039-enter-left 0.28s var(--ux-spring) both;
 }
 
 .u039-stagger > * {
-  animation: u039-row-in 0.24s var(--ux-ease) both;
+  animation: u039-row-in 0.3s var(--ux-spring) both;
 }
 
 .u039-stagger > *:nth-child(1) { animation-delay: 0ms; }
-.u039-stagger > *:nth-child(2) { animation-delay: 20ms; }
-.u039-stagger > *:nth-child(3) { animation-delay: 40ms; }
-.u039-stagger > *:nth-child(4) { animation-delay: 60ms; }
-.u039-stagger > *:nth-child(5) { animation-delay: 80ms; }
+.u039-stagger > *:nth-child(2) { animation-delay: 18ms; }
+.u039-stagger > *:nth-child(3) { animation-delay: 36ms; }
+.u039-stagger > *:nth-child(4) { animation-delay: 54ms; }
+.u039-stagger > *:nth-child(5) { animation-delay: 72ms; }
+.u039-stagger > *:nth-child(6) { animation-delay: 90ms; }
+.u039-stagger > *:nth-child(7) { animation-delay: 108ms; }
+.u039-stagger > *:nth-child(8) { animation-delay: 126ms; }
 
 @keyframes u039-row-in {
   from {
-    opacity: 1;
-    transform: translate3d(0, 6px, 0);
+    opacity: 0.55;
+    transform: translate3d(0, 8px, 0) scale(0.985);
   }
   to {
     opacity: 1;
-    transform: translate3d(0, 0, 0);
+    transform: translate3d(0, 0, 0) scale(1);
   }
 }
 
@@ -1112,14 +1114,14 @@
   overflow: hidden;
   background: linear-gradient(
     145deg,
-    rgba(20, 24, 38, 0.78) 0%,
-    rgba(12, 15, 26, 0.72) 50%,
-    rgba(18, 22, 36, 0.76) 100%
+    rgba(20, 25, 46, 0.64) 0%,
+    rgba(11, 15, 30, 0.56) 50%,
+    rgba(18, 22, 42, 0.62) 100%
   );
-  -webkit-backdrop-filter: blur(20px) saturate(175%);
-  backdrop-filter: blur(20px) saturate(175%);
+  -webkit-backdrop-filter: blur(22px) saturate(185%) brightness(1.04);
+  backdrop-filter: blur(22px) saturate(185%) brightness(1.04);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    inset 0 1px 0 rgba(255, 255, 255, 0.26),
     inset 0 -1px 2px rgba(0, 0, 0, 0.35);
 }
 
@@ -2004,19 +2006,18 @@
 }
 
 .u079-bloom {
-  animation: u079-bloom-in 0.55s var(--ux-spring) both;
+  animation: u079-bloom-in 0.38s var(--ux-spring) both;
   animation-delay: var(--d, 0ms);
+  will-change: transform, opacity;
 }
 
 @keyframes u079-bloom-in {
   from {
     opacity: 0;
-    filter: blur(8px);
-    transform: translate3d(0, 8px, 0) scale(0.97);
+    transform: translate3d(0, 12px, 0) scale(0.96);
   }
   to {
     opacity: 1;
-    filter: none;
     transform: translate3d(0, 0, 0) scale(1);
   }
 }
@@ -2244,18 +2245,21 @@
 }
 
 .u208-a.is-hop {
-  animation: u208-hop 0.72s cubic-bezier(0.3, 0.6, 0.4, 1) 1;
+  animation: u208-hop 0.68s cubic-bezier(0.22, 1.28, 0.36, 1) 1;
 }
 
 @keyframes u208-hop {
   32% {
-    transform: translateY(-16px);
+    transform: translate3d(0, -16px, 0) scale(1.04);
   }
   58% {
-    transform: translateY(0);
+    transform: translate3d(0, 0, 0) scale(0.98);
   }
-  76% {
-    transform: translateY(-5px);
+  78% {
+    transform: translate3d(0, -5px, 0) scale(1.01);
+  }
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
   }
 }
 
@@ -2270,22 +2274,27 @@
   top: 0;
   padding: 5px 11px;
   border-radius: 10px;
-  background: rgba(15, 23, 42, 0.95);
-  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(15, 23, 42, 0.94);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+  backdrop-filter: blur(16px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.22);
   color: #ffffff;
   font-size: 12.5px;
   font-weight: 700;
   white-space: nowrap;
   pointer-events: none;
   opacity: 0;
-  transform: translate3d(-50%, -100%, 0);
+  transform: translate3d(-50%, calc(-100% + 4px), 0) scale(0.92);
   box-shadow: 0 10px 24px -8px rgba(0, 0, 0, 0.75);
-  transition: opacity 0.15s var(--ux-ease);
+  transition:
+    opacity 0.16s var(--ux-ease),
+    transform 0.22s var(--ux-spring);
   z-index: 48;
 }
 
 .u208-tip.is-on {
   opacity: 1;
+  transform: translate3d(-50%, -100%, 0) scale(1);
 }
 
 @media (prefers-reduced-motion: reduce) {
