@@ -29,6 +29,8 @@ import {
   Repeat2,
   Compass,
   Search,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import Hls from 'hls.js';
 import { AppleSpinner } from './components/AppleSpinner';
@@ -41,6 +43,7 @@ import { CursorGlowCard } from './components/CursorGlowCard';
 import { SlidingPillTabs } from './components/SlidingPillTabs';
 import { LiquidGlassButton } from './components/LiquidGlassButton';
 import { DockedMiniPlayer } from './components/DockedMiniPlayer';
+import { MacBookAppDock } from './components/MacBookAppDock';
 import { HoldToDeleteButton, HoldToDeleteUndoBar } from './components/HoldToDeleteButton';
 import { CopyLinkButton } from './components/CopyLinkButton';
 import { HeartBurstButton } from './components/HeartBurstButton';
@@ -164,7 +167,8 @@ export default function AudioPlayerPage() {
   const [searchTtChallengeId, setSearchTtChallengeId] = useState<string | undefined>(undefined);
   const [searchHasMore, setSearchHasMore] = useState(false);
 
-  const [activeTab, setActiveTab] = useState<'queue' | 'suggestions' | 'playlists' | 'history'>('queue');
+  const [activePage, setActivePage] = useState<'player' | 'discover'>('player');
+  const [activeTab, setActiveTab] = useState<'queue' | 'playlists' | 'history'>('queue');
   const [tabDirection, setTabDirection] = useState<1 | -1>(1);
 
   // Quản lý tạo/chọn Playlist
@@ -221,9 +225,14 @@ export default function AudioPlayerPage() {
   const prefetchedSuggestCacheRef = useRef<Map<string, TrackData>>(new Map());
   const playRequestIdRef = useRef<number>(0);
   const isSwitchingTrackRef = useRef<boolean>(false);
+  const pagerRef = useRef<HTMLDivElement | null>(null);
+  const libraryCardRef = useRef<HTMLElement | null>(null);
   const suggestScrollRef = useRef<HTMLDivElement | null>(null);
   const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null);
   const loadMoreFnRef = useRef<() => void>(() => {});
+  const discoverSeedTrackRef = useRef<SuggestedTrack | null>(null);
+  const usedChainSeedsRef = useRef<Set<string>>(new Set());
+  const coldDiscoveryOffsetRef = useRef<number>(0);
 
   useEffect(() => {
     queueRef.current = queue;
@@ -449,6 +458,25 @@ export default function AudioPlayerPage() {
     return () => clearTimeout(timer);
   }, [playlists, history, queue, syncSession]);
 
+  const goToPage = useCallback((page: 'player' | 'discover') => {
+    setActivePage(page);
+    const el = pagerRef.current;
+    if (!el) return;
+    const rm = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    el.scrollTo({
+      left: page === 'discover' ? el.clientWidth : 0,
+      behavior: rm ? 'auto' : 'smooth',
+    });
+  }, []);
+
+  const handlePagerScroll = useCallback(() => {
+    const el = pagerRef.current;
+    if (!el || el.clientWidth <= 0) return;
+    const nextPage: 'player' | 'discover' =
+      el.scrollLeft > el.clientWidth * 0.45 ? 'discover' : 'player';
+    setActivePage((prev) => (prev === nextPage ? prev : nextPage));
+  }, []);
+
   const handleToggleSuggestions = (enabled: boolean) => {
     setSuggestionsEnabled(enabled);
     try {
@@ -456,7 +484,8 @@ export default function AudioPlayerPage() {
     } catch {}
     if (!enabled) {
       setSuggestions([]);
-      if (activeTab === 'suggestions') setActiveTab('queue');
+      setSuggestOffset(0);
+      setSuggestHasMore(false);
     }
     showToast(enabled ? 'Đã bật Gợi ý & Tự phát tiếp' : 'Đã tắt tính năng Gợi ý');
   };
@@ -474,6 +503,11 @@ export default function AudioPlayerPage() {
 
     const controller = new AbortController();
     let prefetchTimer: number | null = null;
+    discoverSeedTrackRef.current = null;
+    usedChainSeedsRef.current.clear();
+    if (currentTrack.originalUrl) {
+      usedChainSeedsRef.current.add(currentTrack.originalUrl);
+    }
     setLoadingSuggestions(true);
     setSuggestOffset(0);
     setSuggestHasMore(false);
@@ -483,7 +517,7 @@ export default function AudioPlayerPage() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         offset: 0,
-        limit: 10,
+        limit: 12,
         track: {
           id: currentTrack.id,
           originalUrl: currentTrack.originalUrl,
@@ -499,7 +533,7 @@ export default function AudioPlayerPage() {
         if (Array.isArray(json?.suggestions)) {
           const list = json.suggestions as SuggestedTrack[];
           setSuggestions(list);
-          setSuggestHasMore(Boolean(json?.hasMore));
+          setSuggestHasMore(Boolean(json?.hasMore) || list.length >= 4);
           setSuggestOffset(Number(json?.nextOffset ?? list.length));
 
           // Prefetch ngầm bài gợi ý top 1 sau 1.2s để bấm nghe là phát tức thì
@@ -552,6 +586,49 @@ export default function AudioPlayerPage() {
       }
     };
   }, [currentTrack?.id, currentTrack?.originalUrl, suggestionsEnabled]);
+
+  // Nếu chưa phát bài nào mà người dùng vuốt sang trang Tìm & Gợi ý -> tự nạp bảng gợi ý nhạc hot kiểu YouTube
+  useEffect(() => {
+    if (
+      activePage !== 'discover' ||
+      !suggestionsEnabled ||
+      currentTrack ||
+      submittedSearch ||
+      suggestions.length > 0 ||
+      loadingSuggestions
+    ) {
+      return;
+    }
+
+    const controller = new AbortController();
+    setLoadingSuggestions(true);
+    coldDiscoveryOffsetRef.current = 0;
+
+    fetch('/api/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query: 'nhạc trẻ việt nam hot chill remix',
+        platform: 'all',
+        offset: 0,
+        limit: 12,
+      }),
+      signal: controller.signal,
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        const items = Array.isArray(data?.results) ? (data.results as SuggestedTrack[]) : [];
+        setSuggestions(items);
+        coldDiscoveryOffsetRef.current = Number(data?.nextOffset ?? items.length);
+        setSuggestHasMore(Boolean(data?.hasMore));
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!controller.signal.aborted) setLoadingSuggestions(false);
+      });
+
+    return () => controller.abort();
+  }, [activePage, currentTrack, loadingSuggestions, submittedSearch, suggestions.length, suggestionsEnabled]);
 
   const executeTrackSearch = useCallback(
     async (
@@ -633,22 +710,65 @@ export default function AudioPlayerPage() {
       return;
     }
 
-    if (!currentTrack || !suggestHasMore) return;
+    if (!currentTrack) {
+      if (!suggestHasMore) return;
+      setLoadingMoreSuggest(true);
+      try {
+        const res = await fetch('/api/search', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            query: 'nhạc trẻ việt nam hot chill remix',
+            platform: 'all',
+            offset: coldDiscoveryOffsetRef.current,
+            limit: 10,
+          }),
+        });
+        const data = await res.json();
+        const extra = Array.isArray(data?.results) ? (data.results as SuggestedTrack[]) : [];
+        if (extra.length > 0) {
+          setSuggestions((prev) => {
+            const seen = new Set(prev.map((x) => `${x.source}:${x.id}`));
+            const fresh = extra.filter((x) => !seen.has(`${x.source}:${x.id}`));
+            return [...prev, ...fresh];
+          });
+        }
+        coldDiscoveryOffsetRef.current = Number(
+          data?.nextOffset ?? coldDiscoveryOffsetRef.current + extra.length
+        );
+        setSuggestHasMore(Boolean(data?.hasMore));
+      } catch {
+      } finally {
+        setLoadingMoreSuggest(false);
+      }
+      return;
+    }
+
+    if (!suggestHasMore) return;
     setLoadingMoreSuggest(true);
     try {
+      const activeSeed = discoverSeedTrackRef.current;
       const res = await fetch('/api/related', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           offset: suggestOffset,
           limit: 10,
-          track: {
-            id: currentTrack.id,
-            originalUrl: currentTrack.originalUrl,
-            title: currentTrack.title,
-            author: currentTrack.author,
-            source: currentTrack.source,
-          },
+          track: activeSeed
+            ? {
+                id: activeSeed.id,
+                originalUrl: activeSeed.url,
+                title: activeSeed.title,
+                author: activeSeed.author,
+                source: activeSeed.source,
+              }
+            : {
+                id: currentTrack.id,
+                originalUrl: currentTrack.originalUrl,
+                title: currentTrack.title,
+                author: currentTrack.author,
+                source: currentTrack.source,
+              },
         }),
       });
       const json = await res.json();
@@ -662,8 +782,23 @@ export default function AudioPlayerPage() {
           return [...prev, ...fresh];
         });
       }
-      setSuggestHasMore(Boolean(json?.hasMore));
-      setSuggestOffset(Number(json?.nextOffset ?? suggestOffset + extra.length));
+
+      if (Boolean(json?.hasMore)) {
+        setSuggestOffset(Number(json?.nextOffset ?? suggestOffset + extra.length));
+        setSuggestHasMore(true);
+      } else {
+        // Khi hết pool của bài hiện tại -> nối tiếp sang bài gợi ý chưa dùng (gợi ý liên tục như YouTube)
+        const pool = [...suggestionsRef.current, ...extra];
+        const nextSeed = pool.find((s) => s.url && !usedChainSeedsRef.current.has(s.url));
+        if (nextSeed) {
+          usedChainSeedsRef.current.add(nextSeed.url);
+          discoverSeedTrackRef.current = nextSeed;
+          setSuggestOffset(0);
+          setSuggestHasMore(true);
+        } else {
+          setSuggestHasMore(false);
+        }
+      }
     } catch {
     } finally {
       setLoadingMoreSuggest(false);
@@ -689,7 +824,7 @@ export default function AudioPlayerPage() {
   }, [loadMoreRelatedOrSearch]);
 
   useEffect(() => {
-    if (!suggestionsEnabled || activeTab !== 'suggestions') return;
+    if (activePage !== 'discover') return;
     const rootEl = suggestScrollRef.current;
     const sentinel = loadMoreSentinelRef.current;
     if (!rootEl || !sentinel || typeof IntersectionObserver === 'undefined') return;
@@ -700,11 +835,11 @@ export default function AudioPlayerPage() {
           loadMoreFnRef.current();
         }
       },
-      { root: rootEl, rootMargin: '90px' }
+      { root: rootEl, rootMargin: '140px' }
     );
     observer.observe(sentinel);
     return () => observer.disconnect();
-  }, [suggestionsEnabled, activeTab, submittedSearch, suggestions.length, searchResults.length]);
+  }, [activePage, submittedSearch, suggestions.length, searchResults.length]);
 
   const handleChangeLockScreenMode = (mode: 'track' | 'seek') => {
     setLockScreenControlMode(mode);
@@ -2010,7 +2145,7 @@ export default function AudioPlayerPage() {
     : null;
 
   return (
-    <main className="relative min-h-screen w-full overflow-x-hidden flex flex-col items-center px-4 pt-[max(1rem,env(safe-area-inset-top))] pb-[max(7.5rem,calc(env(safe-area-inset-bottom)+5.5rem))]">
+    <main className="relative h-[100dvh] w-full overflow-hidden flex flex-col">
       {/* NỀN NEON LIQUID GLASS (RADIAL GRADIENT THUẦN GPU, KHÔNG BLUR NẶNG GÂY LAG iOS) */}
       <div className="fixed inset-0 -z-10 overflow-hidden bg-[#05070e] pointer-events-none">
         <div
@@ -2224,42 +2359,65 @@ export default function AudioPlayerPage() {
         </div>
       )}
 
-      <div className="relative z-10 w-full max-w-[460px] space-y-4 my-1">
-        {/* THANH TIÊU ĐỀ + NÚT BÁNH RĂNG CÀI ĐẶT GÓC PHẢI TRÊN CÙNG */}
-        <header className="flex items-center justify-between px-1">
-          <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-full neon-orb-primary flex items-center justify-center">
-              {isPlaying ? (
-                <AudioLines className="w-4.5 h-4.5 text-white animate-pulse" />
-              ) : (
-                <Music2 className="w-4.5 h-4.5 text-white" />
-              )}
-            </div>
-            <span className="text-xl font-bold tracking-tight text-white">
-              LiquidAudio
-            </span>
-          </div>
+      <div
+        ref={pagerRef}
+        onScroll={handlePagerScroll}
+        className="la-pager no-scrollbar relative z-10"
+      >
+        {/* ================= TRANG 0 (MẶC ĐỊNH): NGHE NHẠC ================= */}
+        <section
+          aria-label="Trang Nghe nhạc"
+          className="la-pager-page px-4 pt-[max(1rem,env(safe-area-inset-top))] pb-[max(9.5rem,calc(env(safe-area-inset-bottom)+8rem))] flex flex-col items-center"
+        >
+          <div className="w-full max-w-[460px] space-y-4 my-1">
+            {/* THANH TIÊU ĐỀ + GỢI Ý VUỐT PHẢI & CÀI ĐẶT */}
+            <header className="flex items-center justify-between gap-2 px-1">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="w-9 h-9 rounded-full neon-orb-primary flex items-center justify-center shrink-0">
+                  {isPlaying ? (
+                    <AudioLines className="w-4.5 h-4.5 text-white animate-pulse" />
+                  ) : (
+                    <Music2 className="w-4.5 h-4.5 text-white" />
+                  )}
+                </div>
+                <span className="text-xl font-bold tracking-tight text-white truncate">
+                  LiquidAudio
+                </span>
+              </div>
 
-          <button
-            type="button"
-            onClick={() => setShowSettingsModal(true)}
-            className="liquid-pill px-4 py-2 rounded-full flex items-center gap-2 text-[13px] font-semibold text-white/95 hover:text-white active:scale-95 transition"
-          >
-            {syncSession && (
-              <span
-                className={`w-2 h-2 rounded-full ${
-                  syncStatus === 'error'
-                    ? 'bg-rose-400'
-                    : syncStatus === 'syncing'
-                    ? 'bg-amber-300 animate-pulse'
-                    : 'bg-emerald-400 shadow-[0_0_8px_#34d399]'
-                }`}
-              />
-            )}
-            <Settings className="w-4 h-4 text-cyan-300" />
-            <span>{syncSession ? `@${syncSession.username}` : 'Cài đặt'}</span>
-          </button>
-        </header>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => goToPage('discover')}
+                  className="liquid-pill px-3 py-2 rounded-full flex items-center gap-1 text-[13px] font-semibold text-cyan-200 hover:text-white active:scale-95 transition"
+                  title="Vuốt sang phải để tìm bài & xem gợi ý"
+                >
+                  <Search className="w-3.5 h-3.5 text-cyan-300" />
+                  <span>Tìm kiếm</span>
+                  <ChevronRight className="w-3.5 h-3.5 text-white/60" />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setShowSettingsModal(true)}
+                  className="liquid-pill px-3.5 py-2 rounded-full flex items-center gap-1.5 text-[13px] font-semibold text-white/95 hover:text-white active:scale-95 transition"
+                >
+                  {syncSession && (
+                    <span
+                      className={`w-2 h-2 rounded-full ${
+                        syncStatus === 'error'
+                          ? 'bg-rose-400'
+                          : syncStatus === 'syncing'
+                          ? 'bg-amber-300 animate-pulse'
+                          : 'bg-emerald-400 shadow-[0_0_8px_#34d399]'
+                      }`}
+                    />
+                  )}
+                  <Settings className="w-4 h-4 text-cyan-300" />
+                  <span>{syncSession ? `@${syncSession.username}` : 'Cài đặt'}</span>
+                </button>
+              </div>
+            </header>
 
         {/* THÔNG BÁO TRẠNG THÁI MẠNG & TỰ NỐI PHÁT NHẠC (#091) */}
         <NetworkStatusBanner
@@ -2589,8 +2747,8 @@ export default function AudioPlayerPage() {
           </CursorGlowCard>
         )}
 
-        {/* KHỐI 3: DANH SÁCH TIẾP THEO • GỢI Ý • PLAYLIST • ĐÃ NGHE (#039 & #228) */}
-        <CursorGlowCard className="p-4 space-y-3.5">
+        {/* KHỐI 3: DANH SÁCH TIẾP THEO • PLAYLIST • LỊCH SỬ (#039 & #228) */}
+        <CursorGlowCard ref={libraryCardRef} className="p-4 space-y-3.5">
           <SlidingPillTabs
             activeTab={activeTab}
             onChange={(nextTab, dir) => {
@@ -2603,15 +2761,6 @@ export default function AudioPlayerPage() {
                 label: `Tiếp (${queue.length})`,
                 icon: <ListMusic className="w-3.5 h-3.5 shrink-0" />,
               },
-              ...(suggestionsEnabled
-                ? [
-                    {
-                      id: 'suggestions' as const,
-                      label: 'Gợi ý',
-                      icon: <Compass className="w-3.5 h-3.5 shrink-0" />,
-                    },
-                  ]
-                : []),
               {
                 id: 'playlists',
                 label: 'Playlist',
@@ -2632,195 +2781,6 @@ export default function AudioPlayerPage() {
               tabDirection > 0 ? 'u039-panel-right' : 'u039-panel-left'
             }`}
           >
-            {/* TAB GỢI Ý & TÌM KIẾM BÀI HÁT YOUTUBE / TIKTOK (CUỘN XUỐNG TẢI THÊM) */}
-            {suggestionsEnabled && activeTab === 'suggestions' && (
-              <div className="space-y-3">
-                {/* Form tìm kiếm bài hát YouTube / TikTok */}
-                <form
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    executeTrackSearch(searchQuery, searchPlatform, false);
-                  }}
-                  className="space-y-2"
-                >
-                  <div className="flex items-center gap-2 bg-black/40 border border-white/15 rounded-2xl px-3 py-1.5">
-                    <Search className="w-4 h-4 text-cyan-300 shrink-0" />
-                    <input
-                      type="text"
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      placeholder="Tìm bài hát YouTube, TikTok..."
-                      className="flex-1 min-w-0 py-1.5 text-base bg-transparent text-white placeholder-white/50 focus:outline-none"
-                    />
-                    {searchQuery && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSearchQuery('');
-                          setSubmittedSearch('');
-                          setSearchResults([]);
-                          setSearchHasMore(false);
-                        }}
-                        className="p-1 text-white/55 hover:text-white shrink-0"
-                        title="Xóa tìm kiếm"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
-                    )}
-                    <button
-                      type="submit"
-                      className="neon-orb-primary px-3.5 py-1.5 rounded-xl text-[13px] font-semibold text-white shrink-0 active:scale-95 transition"
-                    >
-                      Tìm
-                    </button>
-                  </div>
-
-                  {/* Bộ lọc nguồn tìm kiếm */}
-                  <div className="flex items-center justify-between gap-2 flex-wrap">
-                    <div className="flex items-center gap-1.5">
-                      {(
-                        [
-                          { id: 'all', label: 'Tất cả' },
-                          { id: 'youtube', label: 'YouTube' },
-                          { id: 'tiktok', label: 'TikTok' },
-                        ] as const
-                      ).map((opt) => (
-                        <button
-                          key={opt.id}
-                          type="button"
-                          onClick={() => {
-                            setSearchPlatform(opt.id);
-                            if (searchQuery.trim()) {
-                              executeTrackSearch(searchQuery, opt.id, false);
-                            }
-                          }}
-                          className={`px-3 py-1 rounded-full text-[13px] font-semibold border transition active:scale-95 ${
-                            searchPlatform === opt.id
-                              ? 'bg-cyan-400/20 border-cyan-300/50 text-cyan-200'
-                              : 'bg-white/5 border-white/10 text-white/75 hover:text-white'
-                          }`}
-                        >
-                          {opt.label}
-                        </button>
-                      ))}
-                    </div>
-
-                    {submittedSearch && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSearchQuery('');
-                          setSubmittedSearch('');
-                          setSearchResults([]);
-                        }}
-                        className="text-[13px] text-cyan-300 hover:underline font-medium"
-                      >
-                        Về gợi ý bài đang phát
-                      </button>
-                    )}
-                  </div>
-                </form>
-
-                {/* Danh sách kết quả tìm kiếm hoặc bài gợi ý liên quan + Infinite Scroll */}
-                {(() => {
-                  const isSearchMode = Boolean(submittedSearch);
-                  const activeList = isSearchMode ? searchResults : suggestions;
-                  const activeLoading = isSearchMode ? isSearching : loadingSuggestions;
-                  const activeHasMore = isSearchMode ? searchHasMore : suggestHasMore;
-
-                  return (
-                    <div
-                      ref={suggestScrollRef}
-                      onScroll={(e) => {
-                        const el = e.currentTarget;
-                        if (
-                          el.scrollHeight - el.scrollTop - el.clientHeight < 90 &&
-                          activeHasMore &&
-                          !loadingMoreSuggest
-                        ) {
-                          loadMoreRelatedOrSearch();
-                        }
-                      }}
-                      className="space-y-2.5 max-h-[24rem] overflow-y-auto no-scrollbar u039-stagger"
-                    >
-                      {!isSearchMode && !currentTrack ? (
-                        <p className="text-center text-[15px] text-white/60 py-8 leading-relaxed">
-                          Nhập tên bài hát / ca sĩ để tìm từ YouTube &amp; TikTok, hoặc phát 1 bài để xem gợi ý tự động!
-                        </p>
-                      ) : activeLoading && activeList.length === 0 ? (
-                        <SuggestionSkeleton rows={4} />
-                      ) : activeList.length === 0 ? (
-                        <p className="text-center text-[15px] text-white/60 py-8">
-                          {isSearchMode
-                            ? `Không tìm thấy bài nào cho "${submittedSearch}". Thử từ khóa khác hoặc đổi sang YouTube/Tất cả!`
-                            : 'Chưa tìm thấy bài gợi ý cho bài này. Thử tìm kiếm trực tiếp ở ô trên!'}
-                        </p>
-                      ) : (
-                        <>
-                          {activeList.map((item, idx) => (
-                            <div
-                              key={`${item.id}_${idx}`}
-                              style={{ '--d': `${(idx % 10) * 35}ms` } as React.CSSProperties}
-                              className="u079-bloom flex items-center gap-3 p-2.5 rounded-2xl bg-white/5 border border-white/10 hover:bg-white/10 transition"
-                            >
-                              <span className="w-5 text-center text-[13px] font-semibold text-white/55 tabular-nums shrink-0">
-                                {idx + 1}
-                              </span>
-                              <button
-                                type="button"
-                                onClick={() => playSuggestedTrack(item, true)}
-                                className="flex items-center gap-3 flex-1 min-w-0 text-left"
-                              >
-                                <img
-                                  src={`/api/image-proxy?url=${encodeURIComponent(item.thumbnail)}`}
-                                  alt={item.title}
-                                  className="w-12 h-12 rounded-xl object-cover bg-white/10 border border-white/15 shrink-0"
-                                />
-                                <div className="min-w-0 flex-1">
-                                  <p className="text-[15.5px] font-semibold text-white truncate">
-                                    {item.title}
-                                  </p>
-                                  <p className="text-[13px] text-white/70 truncate">
-                                    {item.author} •{' '}
-                                    <span className="uppercase text-[11px] font-bold text-cyan-300">
-                                      {item.source}
-                                    </span>
-                                  </p>
-                                </div>
-                              </button>
-
-                              <button
-                                type="button"
-                                onClick={() => playSuggestedTrack(item, false)}
-                                title="Thêm vào Tiếp theo"
-                                className="liquid-btn p-2.5 rounded-full text-cyan-300 shrink-0"
-                              >
-                                <ListPlus className="w-4 h-4" />
-                              </button>
-                            </div>
-                          ))}
-
-                          <div ref={loadMoreSentinelRef} className="pt-1 pb-2">
-                            {loadingMoreSuggest ? (
-                              <SuggestionSkeleton rows={2} />
-                            ) : activeHasMore ? (
-                              <button
-                                type="button"
-                                onClick={() => loadMoreRelatedOrSearch()}
-                                className="w-full py-2.5 rounded-xl bg-white/5 border border-white/10 text-[13px] font-semibold text-cyan-300 hover:bg-white/10 transition"
-                              >
-                                Kéo xuống hoặc nhấn để tải thêm bài...
-                              </button>
-                            ) : null}
-                          </div>
-                        </>
-                      )}
-                    </div>
-                  );
-                })()}
-              </div>
-            )}
-
           {/* TAB 1: HÀNG ĐỢI TIẾP THEO */}
           {activeTab === 'queue' && (
             <div className="space-y-2.5 max-h-[24rem] overflow-y-auto no-scrollbar u039-stagger">
@@ -2903,7 +2863,7 @@ export default function AudioPlayerPage() {
                     value={newPlaylistName}
                     onChange={(e) => setNewPlaylistName(e.target.value)}
                     placeholder="Tên playlist mới (VD: Chill Đêm)..."
-                    className="flex-1 px-4 py-2.5 text-base bg-black/35 border border-white/12 rounded-2xl text-white placeholder-white/50 focus:outline-none focus:border-cyan-400/50"
+                    className="flex-1 min-w-0 px-3.5 py-2.5 text-base bg-black/35 border border-white/12 rounded-2xl text-white placeholder-white/50 focus:outline-none focus:border-cyan-400/50"
                   />
                   <button
                     type="submit"
@@ -3112,59 +3072,325 @@ export default function AudioPlayerPage() {
           </div>
         </CursorGlowCard>
 
-        {/* THẺ <audio> DUY NHẤT CHUẨN iOS SAFARI + CHỐNG LAG TỰ PHỤC HỒI */}
-        <audio
-          ref={audioRef}
-          playsInline
-          preload="auto"
-          onPlay={() => {
-            clearStallWatchdog();
-            setIsPlaying(true);
-          }}
-          onPlaying={() => {
-            clearStallWatchdog();
-            recoveryAttemptsRef.current = 0;
-          }}
-          onPause={() => {
-            clearStallWatchdog();
-            setIsPlaying(false);
-          }}
-          onWaiting={startStallWatchdog}
-          onStalled={startStallWatchdog}
-          onError={() => {
-            if (isSwitchingTrackRef.current) return;
+          </div>
+        </section>
+
+        {/* ================= TRANG 1 (VUỐT PHẢI): SEARCH & GỢI Ý LIÊN TỤC KIỂU YOUTUBE ================= */}
+        <section
+          ref={suggestScrollRef}
+          aria-label="Trang Tìm kiếm và Gợi ý kiểu YouTube"
+          onScroll={(e) => {
+            const el = e.currentTarget;
+            const activeHasMore = submittedSearch ? searchHasMore : suggestHasMore;
             if (
-              audioRef.current &&
-              audioRef.current.src &&
-              audioRef.current.src !== SILENT_AUDIO_URI
+              el.scrollHeight - el.scrollTop - el.clientHeight < 140 &&
+              activeHasMore &&
+              !loadingMoreSuggest
             ) {
-              recoverCurrentTrack();
+              loadMoreRelatedOrSearch();
             }
           }}
-          onTimeUpdate={() => {
-            if (audioRef.current) {
-              clearStallWatchdog();
-              const t = audioRef.current.currentTime;
-              if (t > 0) lastPlayTimeRef.current = t;
-              setCurrentTime(t);
-              updateMediaSessionPosition();
-              checkSleepTimerAndFadeOut();
-              maybePrefetchNextTrack();
-            }
-          }}
-          onLoadedMetadata={() => {
-            if (audioRef.current) {
-              setDuration(audioRef.current.duration);
-              updateMediaSessionPosition();
-            }
-          }}
-          onEnded={() => {
-            clearStallWatchdog();
-            handleAudioEnded();
-          }}
-          className="hidden"
-        />
+          className="la-pager-page px-4 pt-[max(1rem,env(safe-area-inset-top))] pb-[max(10.5rem,calc(env(safe-area-inset-bottom)+9rem))] flex flex-col items-center"
+        >
+          <div className="w-full max-w-[460px] space-y-4 my-1">
+            {/* Header Trang Khám phá kiểu YouTube Music */}
+            <header className="flex items-center justify-between gap-2 px-1">
+              <button
+                type="button"
+                onClick={() => goToPage('player')}
+                className="liquid-pill px-3.5 py-2 rounded-full flex items-center gap-1 text-[13px] font-semibold text-white/90 hover:text-white active:scale-95 transition shrink-0"
+              >
+                <ChevronLeft className="w-4 h-4 text-cyan-300" />
+                <span>Nghe nhạc</span>
+              </button>
+
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="w-7 h-7 rounded-full bg-gradient-to-br from-rose-500 to-pink-600 flex items-center justify-center shrink-0 shadow-[0_0_16px_rgba(244,63,94,0.45)]">
+                  <Compass className="w-4 h-4 text-white" />
+                </span>
+                <span className="text-[17px] font-bold tracking-tight text-white truncate">
+                  Khám phá YouTube / TikTok
+                </span>
+              </div>
+            </header>
+
+            {/* Thanh tìm kiếm & Bộ lọc kiểu YouTube */}
+            <CursorGlowCard className="p-4 space-y-3">
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  executeTrackSearch(searchQuery, searchPlatform, false);
+                }}
+                className="space-y-2.5"
+              >
+                <div className="flex items-center gap-2 bg-black/45 border border-white/15 rounded-2xl px-3.5 py-1.5">
+                  <Search className="w-4 h-4 text-cyan-300 shrink-0" />
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Tìm tên bài hát, ca sĩ (YouTube / TikTok)..."
+                    className="flex-1 min-w-0 py-2 text-base bg-transparent text-white placeholder-white/50 focus:outline-none"
+                  />
+                  {searchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSearchQuery('');
+                        setSubmittedSearch('');
+                        setSearchResults([]);
+                        setSearchHasMore(false);
+                      }}
+                      className="p-1 text-white/60 hover:text-white shrink-0"
+                      title="Xóa tìm kiếm"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
+                  <button
+                    type="submit"
+                    className="neon-orb-primary px-4 py-2 rounded-xl text-[14px] font-semibold text-white shrink-0 active:scale-95 transition"
+                  >
+                    Tìm
+                  </button>
+                </div>
+
+                {/* Bộ lọc nền tảng + Nút quay về Gợi ý theo bài */}
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <div className="flex items-center gap-1.5">
+                    {(
+                      [
+                        { id: 'all', label: 'Tất cả' },
+                        { id: 'youtube', label: 'YouTube' },
+                        { id: 'tiktok', label: 'TikTok' },
+                      ] as const
+                    ).map((opt) => (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => {
+                          setSearchPlatform(opt.id);
+                          if (searchQuery.trim()) {
+                            executeTrackSearch(searchQuery, opt.id, false);
+                          }
+                        }}
+                        className={`px-3.5 py-1.5 rounded-full text-[13px] font-semibold border transition active:scale-95 ${
+                          searchPlatform === opt.id
+                            ? 'bg-cyan-400/20 border-cyan-300/50 text-cyan-200'
+                            : 'bg-white/5 border-white/10 text-white/80 hover:text-white'
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  {submittedSearch && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSearchQuery('');
+                        setSubmittedSearch('');
+                        setSearchResults([]);
+                      }}
+                      className="text-[13px] text-cyan-300 hover:underline font-medium"
+                    >
+                      Về gợi ý liên tục
+                    </button>
+                  )}
+                </div>
+              </form>
+
+              {/* Từ khóa gợi ý nhanh kiểu YouTube */}
+              {!submittedSearch && (
+                <div className="flex gap-1.5 overflow-x-auto no-scrollbar pt-0.5">
+                  {[
+                    'Nhạc Việt Hot',
+                    'Rap Việt',
+                    'Lofi Đêm',
+                    'TikTok Viral',
+                    'Sơn Tùng M-TP',
+                    'Low G',
+                  ].map((chip) => (
+                    <button
+                      key={chip}
+                      type="button"
+                      onClick={() => {
+                        setSearchQuery(chip);
+                        executeTrackSearch(chip, searchPlatform, false);
+                      }}
+                      className="px-3 py-1.5 rounded-full bg-white/8 hover:bg-white/15 border border-white/12 text-[13px] font-medium text-white/85 shrink-0 transition active:scale-95"
+                    >
+                      {chip}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </CursorGlowCard>
+
+            {/* Danh sách phát gợi ý liên tục / Kết quả tìm kiếm (cuộn xuống tự load thêm vô tận) */}
+            {(() => {
+              const isSearchMode = Boolean(submittedSearch);
+              const activeList = isSearchMode ? searchResults : suggestions;
+              const activeLoading = isSearchMode ? isSearching : loadingSuggestions;
+              const activeHasMore = isSearchMode ? searchHasMore : suggestHasMore;
+
+              return (
+                <CursorGlowCard className="p-4 space-y-3">
+                  <div className="flex items-center justify-between gap-2 px-0.5">
+                    <h2 className="text-[16px] font-bold text-white truncate">
+                      {isSearchMode
+                        ? `Kết quả cho "${submittedSearch}"`
+                        : currentTrack
+                        ? `Gợi ý tiếp theo · ${currentTrack.title}`
+                        : 'Đề xuất thịnh hành hôm nay'}
+                    </h2>
+                    {activeList.length > 0 && (
+                      <span className="text-xs font-semibold text-cyan-300 tabular-nums shrink-0">
+                        {activeList.length} bài
+                      </span>
+                    )}
+                  </div>
+
+                  {!isSearchMode && !suggestionsEnabled ? (
+                    <div className="py-8 text-center space-y-2">
+                      <p className="text-[15px] text-white/70">
+                        Tính năng Gợi ý đang tắt trong Cài đặt. Bạn vẫn có thể tìm kiếm trực tiếp ở ô phía trên!
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => handleToggleSuggestions(true)}
+                        className="neon-orb-primary px-4 py-2 rounded-full text-[13.5px] font-semibold text-white"
+                      >
+                        Bật lại Gợi ý tự động
+                      </button>
+                    </div>
+                  ) : activeLoading && activeList.length === 0 ? (
+                    <SuggestionSkeleton rows={5} />
+                  ) : activeList.length === 0 ? (
+                    <p className="text-center text-[15px] text-white/65 py-8">
+                      {isSearchMode
+                        ? `Không tìm thấy bài nào cho "${submittedSearch}". Thử từ khóa khác hoặc chọn Tất cả!`
+                        : 'Đang chuẩn bị danh sách gợi ý nhạc cho bạn...'}
+                    </p>
+                  ) : (
+                    <div className="space-y-2.5 u039-stagger">
+                      {activeList.map((item, idx) => (
+                        <div
+                          key={`${item.id}_${idx}`}
+                          style={{ '--d': `${(idx % 10) * 30}ms` } as React.CSSProperties}
+                          className="u079-bloom flex items-center gap-3 p-2.5 rounded-2xl bg-white/5 border border-white/10 hover:bg-white/10 transition"
+                        >
+                          <button
+                            type="button"
+                            onClick={() => playSuggestedTrack(item, true)}
+                            className="flex items-center gap-3 flex-1 min-w-0 text-left"
+                          >
+                            <div className="relative shrink-0">
+                              <img
+                                src={`/api/image-proxy?url=${encodeURIComponent(item.thumbnail)}`}
+                                alt={item.title}
+                                className="w-16 h-12 rounded-xl object-cover bg-white/10 border border-white/15"
+                              />
+                              <span className="absolute bottom-1 right-1 px-1.5 py-0.5 rounded bg-black/75 text-[10px] font-bold uppercase text-cyan-200">
+                                {item.source === 'tiktok' ? 'TT' : item.source === 'soundcloud' ? 'SC' : 'YT'}
+                              </span>
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <p className="text-[15.5px] font-semibold text-white line-clamp-2 leading-snug">
+                                {item.title}
+                              </p>
+                              <p className="text-[13px] text-white/70 truncate mt-0.5">
+                                {item.author}
+                              </p>
+                            </div>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => playSuggestedTrack(item, false)}
+                            title="Thêm vào Tiếp theo"
+                            className="liquid-btn p-2.5 rounded-full text-cyan-300 shrink-0"
+                          >
+                            <ListPlus className="w-4 h-4" />
+                          </button>
+                        </div>
+                      ))}
+
+                      <div ref={loadMoreSentinelRef} className="pt-1 pb-2">
+                        {loadingMoreSuggest ? (
+                          <SuggestionSkeleton rows={2} />
+                        ) : activeHasMore ? (
+                          <button
+                            type="button"
+                            onClick={() => loadMoreRelatedOrSearch()}
+                            className="w-full py-2.5 rounded-xl bg-white/5 border border-white/10 text-[13.5px] font-semibold text-cyan-300 hover:bg-white/10 transition"
+                          >
+                            Kéo xuống để tải thêm bài...
+                          </button>
+                        ) : null}
+                      </div>
+                    </div>
+                  )}
+                </CursorGlowCard>
+              );
+            })()}
+          </div>
+        </section>
       </div>
+
+      {/* THẺ <audio> DUY NHẤT CHUẨN iOS SAFARI + CHỐNG LAG TỰ PHỤC HỒI */}
+      <audio
+        ref={audioRef}
+        playsInline
+        preload="auto"
+        onPlay={() => {
+          clearStallWatchdog();
+          setIsPlaying(true);
+        }}
+        onPlaying={() => {
+          clearStallWatchdog();
+          recoveryAttemptsRef.current = 0;
+        }}
+        onPause={() => {
+          clearStallWatchdog();
+          setIsPlaying(false);
+        }}
+        onWaiting={startStallWatchdog}
+        onStalled={startStallWatchdog}
+        onError={() => {
+          if (isSwitchingTrackRef.current) return;
+          if (
+            audioRef.current &&
+            audioRef.current.src &&
+            audioRef.current.src !== SILENT_AUDIO_URI
+          ) {
+            recoverCurrentTrack();
+          }
+        }}
+        onTimeUpdate={() => {
+          if (audioRef.current) {
+            clearStallWatchdog();
+            const t = audioRef.current.currentTime;
+            if (t > 0) lastPlayTimeRef.current = t;
+            setCurrentTime(t);
+            updateMediaSessionPosition();
+            checkSleepTimerAndFadeOut();
+            maybePrefetchNextTrack();
+          }
+        }}
+        onLoadedMetadata={() => {
+          if (audioRef.current) {
+            setDuration(audioRef.current.duration);
+            updateMediaSessionPosition();
+          }
+        }}
+        onEnded={() => {
+          clearStallWatchdog();
+          handleAudioEnded();
+        }}
+        className="hidden"
+      />
 
       {/* SNACKBAR HOÀN TÁC KHI VUỐT XÓA BÀI HÁT (#071) */}
       <UndoDeleteSnackbar
@@ -3176,14 +3402,137 @@ export default function AudioPlayerPage() {
         onExpire={() => setSwipeUndo(null)}
       />
 
-      {/* MINI PLAYER NỔI KHI CUỘN XUỐNG (#218) */}
+      {/* MINI PLAYER NỔI KHI CUỘN XUỐNG HOẶC KHI Ở TRANG KHÁM PHÁ (#218) */}
       <DockedMiniPlayer
         track={currentTrack}
         targetRef={nowPlayingCardRef}
         isPlaying={isPlaying}
         progressPct={progressPct}
+        forceDocked={activePage === 'discover'}
+        onOpenPlayer={() => goToPage('player')}
         onTogglePlayPause={togglePlayPause}
         onNextTrack={handleNextTrack}
+      />
+
+      {/* THANH DOCK KIỂU MACBOOK PHÓNG TO KHI RÊ / LƯỚT NGÓN TAY (#208) */}
+      <MacBookAppDock
+        items={[
+          {
+            id: 'player',
+            label: 'Nghe nhạc',
+            isActive: activePage === 'player' && activeTab !== 'playlists',
+            gradFrom: '#22d3ee',
+            gradTo: '#6366f1',
+            iconPath: (
+              <>
+                <path
+                  d="M19 30V15l12-3v15"
+                  stroke="#fff"
+                  strokeWidth="2.8"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  fill="none"
+                />
+                <circle cx="15.5" cy="30.5" r="3.8" fill="#fff" />
+                <circle cx="27.5" cy="27.5" r="3.8" fill="#fff" />
+              </>
+            ),
+            onSelect: () => {
+              goToPage('player');
+            },
+          },
+          {
+            id: 'discover',
+            label: 'Tìm & Gợi ý',
+            isActive: activePage === 'discover',
+            gradFrom: '#f43f5e',
+            gradTo: '#ec4899',
+            iconPath: (
+              <>
+                <circle
+                  cx="20.5"
+                  cy="20.5"
+                  r="8"
+                  stroke="#fff"
+                  strokeWidth="3"
+                  fill="none"
+                />
+                <path
+                  d="M26.5 26.5l7 7"
+                  stroke="#fff"
+                  strokeWidth="3.2"
+                  strokeLinecap="round"
+                />
+              </>
+            ),
+            onSelect: () => {
+              goToPage('discover');
+            },
+          },
+          {
+            id: 'playlists',
+            label: 'Playlist',
+            isActive: activePage === 'player' && activeTab === 'playlists',
+            gradFrom: '#a855f7',
+            gradTo: '#10b981',
+            iconPath: (
+              <>
+                <rect
+                  x="11"
+                  y="14"
+                  width="24"
+                  height="18"
+                  rx="4"
+                  fill="none"
+                  stroke="#fff"
+                  strokeWidth="2.6"
+                />
+                <path
+                  d="M16 20h14M16 25.5h9"
+                  stroke="#fff"
+                  strokeWidth="2.6"
+                  strokeLinecap="round"
+                />
+              </>
+            ),
+            onSelect: () => {
+              setTabDirection(1);
+              setActiveTab('playlists');
+              goToPage('player');
+              setTimeout(() => {
+                libraryCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+              }, 220);
+            },
+          },
+          {
+            id: 'settings',
+            label: 'Cài đặt',
+            isActive: showSettingsModal,
+            gradFrom: '#475569',
+            gradTo: '#0f172a',
+            iconPath: (
+              <>
+                <circle
+                  cx="23"
+                  cy="23"
+                  r="5.5"
+                  stroke="#fff"
+                  strokeWidth="2.6"
+                  fill="none"
+                />
+                <path
+                  d="M23 11v3M23 32v3M11 23h3M32 23h3M14.5 14.5l2.2 2.2M29.3 29.3l2.2 2.2M31.5 14.5l-2.2 2.2M16.7 29.3l-2.2 2.2"
+                  stroke="#fff"
+                  strokeWidth="2.6"
+                  strokeLinecap="round"
+                />
+              </>
+            ),
+            onSelect: () => {
+              setShowSettingsModal(true);
+            },
+          },
+        ]}
       />
     </main>
   );

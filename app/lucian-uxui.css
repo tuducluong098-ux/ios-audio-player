@@ -949,7 +949,7 @@
 .u218-dock {
   position: fixed;
   left: 50%;
-  bottom: max(0.85rem, env(safe-area-inset-bottom));
+  bottom: calc(max(0.7rem, env(safe-area-inset-bottom)) + 74px);
   width: min(calc(100vw - 1.5rem), 28rem);
   z-index: 40;
   transform: translate3d(-50%, 145%, 0) scale(0.92);
@@ -1874,7 +1874,7 @@
 .u071-snack {
   position: fixed;
   left: 50%;
-  bottom: max(0.95rem, env(safe-area-inset-bottom));
+  bottom: calc(max(0.7rem, env(safe-area-inset-bottom)) + 76px);
   width: min(calc(100vw - 1.5rem), 26rem);
   z-index: 55;
   display: flex;
@@ -1894,7 +1894,7 @@
 }
 
 .u071-snack.has-dock {
-  bottom: calc(max(0.85rem, env(safe-area-inset-bottom)) + 74px);
+  bottom: calc(max(0.7rem, env(safe-area-inset-bottom)) + 148px);
 }
 
 @keyframes u071-snack-in {
@@ -2130,4 +2130,160 @@
   font-size: 11.5px;
   font-weight: 600;
   opacity: 0.72;
+}
+
+/* ---------- #208 · Cursor-magnified MacBook App Dock (#208) ---------- */
+.u208-wrap {
+  position: fixed;
+  left: 50%;
+  bottom: max(0.65rem, env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  z-index: 46;
+  pointer-events: none;
+}
+
+.u208-dk {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  height: 60px;
+  padding: 8px 14px 10px;
+  border-radius: 22px;
+  background: linear-gradient(
+    165deg,
+    rgba(24, 30, 52, 0.86) 0%,
+    rgba(11, 15, 28, 0.9) 100%
+  );
+  -webkit-backdrop-filter: blur(22px) saturate(185%);
+  backdrop-filter: blur(22px) saturate(185%);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.25),
+    0 18px 40px -10px rgba(0, 0, 0, 0.82);
+  pointer-events: auto;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.u208-a {
+  position: relative;
+  flex: none;
+  width: var(--s, 40px);
+  height: var(--s, 40px);
+  margin-bottom: var(--lift, 0px);
+  padding: 0;
+  border: 0;
+  border-radius: 26%;
+  background: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.u208-a svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+  border-radius: 26%;
+  box-shadow:
+    inset 0 1px 1px rgba(255, 255, 255, 0.35),
+    0 6px 14px -4px rgba(0, 0, 0, 0.6);
+}
+
+.u208-a::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -6px;
+  width: 5px;
+  height: 5px;
+  margin-left: -2.5px;
+  border-radius: 50%;
+  background: #22d3ee;
+  box-shadow: 0 0 8px rgba(34, 211, 238, 0.9);
+  opacity: 0;
+  transform: scale(0.5);
+  transition:
+    opacity 0.22s var(--ux-ease),
+    transform 0.3s var(--ux-spring);
+}
+
+.u208-a.is-run::after {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.u208-a.is-hop {
+  animation: u208-hop 0.72s cubic-bezier(0.3, 0.6, 0.4, 1) 1;
+}
+
+@keyframes u208-hop {
+  32% {
+    transform: translateY(-16px);
+  }
+  58% {
+    transform: translateY(0);
+  }
+  76% {
+    transform: translateY(-5px);
+  }
+}
+
+.u208-a:focus-visible {
+  outline: 2px solid var(--ux-accent);
+  outline-offset: 3px;
+}
+
+.u208-tip {
+  position: fixed;
+  left: 0;
+  top: 0;
+  padding: 5px 11px;
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: #ffffff;
+  font-size: 12.5px;
+  font-weight: 700;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transform: translate3d(-50%, -100%, 0);
+  box-shadow: 0 10px 24px -8px rgba(0, 0, 0, 0.75);
+  transition: opacity 0.15s var(--ux-ease);
+  z-index: 48;
+}
+
+.u208-tip.is-on {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .u208-a.is-hop {
+    animation: none;
+  }
+}
+
+/* ---------- Horizontal Swipe Pager (Nghe nhạc <-> Tìm kiếm & Gợi ý kiểu YouTube) ---------- */
+.la-pager {
+  display: flex;
+  width: 100%;
+  height: 100dvh;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x mandatory;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+}
+
+.la-pager-page {
+  flex: none;
+  width: 100%;
+  height: 100%;
+  scroll-snap-align: start;
+  scroll-snap-stop: always;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior-y: contain;
 }

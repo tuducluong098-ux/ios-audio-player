@@ -17,27 +17,32 @@ interface DockedMiniPlayerProps {
   targetRef: React.RefObject<HTMLElement | null>;
   isPlaying: boolean;
   progressPct: number;
+  forceDocked?: boolean;
+  onOpenPlayer?: () => void;
   onTogglePlayPause: () => void;
   onNextTrack: () => void;
 }
 
 /**
- * Thanh Mini Player nổi tự thu gọn xuống đáy màn hình khi cuộn qua trình phát chính (#218).
+ * Thanh Mini Player nổi tự thu gọn phía trên Dock khi cuộn xuống hoặc khi lướt sang trang Tìm kiếm (#218).
  */
 export function DockedMiniPlayer({
   track,
   targetRef,
   isPlaying,
   progressPct,
+  forceDocked = false,
+  onOpenPlayer,
   onTogglePlayPause,
   onNextTrack,
 }: DockedMiniPlayerProps) {
-  const [isDocked, setIsDocked] = useState(false);
+  const [scrolledPast, setScrolledPast] = useState(false);
+  const isDocked = forceDocked || scrolledPast;
 
   useEffect(() => {
     const el = targetRef.current;
     if (!track || !el || typeof IntersectionObserver === 'undefined') {
-      setIsDocked(false);
+      setScrolledPast(false);
       return;
     }
 
@@ -45,7 +50,7 @@ export function DockedMiniPlayer({
       (entries) => {
         const entry = entries[0];
         if (!entry) return;
-        setIsDocked(!entry.isIntersecting && entry.boundingClientRect.bottom < 80);
+        setScrolledPast(!entry.isIntersecting && entry.boundingClientRect.bottom < 80);
       },
       { threshold: 0.08 }
     );
@@ -56,7 +61,11 @@ export function DockedMiniPlayer({
 
   if (!track) return null;
 
-  const scrollToPlayer = () => {
+  const handleOpenOrScroll = () => {
+    if (onOpenPlayer && forceDocked) {
+      onOpenPlayer();
+      return;
+    }
     const el = targetRef.current;
     if (!el) return;
     const rm = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -75,9 +84,9 @@ export function DockedMiniPlayer({
         <button
           type="button"
           tabIndex={isDocked ? 0 : -1}
-          onClick={scrollToPlayer}
+          onClick={handleOpenOrScroll}
           className="flex items-center gap-2.5 flex-1 min-w-0 text-left h-full py-1.5 rounded-xl focus-visible:outline-none"
-          aria-label={`Cuộn lên trình phát bài ${track.title}`}
+          aria-label={`Quay lại trình phát bài ${track.title}`}
         >
           <div className="relative shrink-0">
             <img
