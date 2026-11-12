@@ -26,7 +26,10 @@ export async function GET(req: NextRequest) {
       headers.Referer = 'https://soundcloud.com/';
     }
 
-    const res = await fetch(imageUrl, { headers });
+    const res = await fetch(imageUrl, {
+      headers,
+      signal: AbortSignal.timeout(5000),
+    });
 
     if (!res.ok) {
       return NextResponse.redirect('https://placehold.co/512x512/18181b/ffffff.jpg?text=Audio');
@@ -39,7 +42,7 @@ export async function GET(req: NextRequest) {
       status: 200,
       headers: {
         'Content-Type': contentType,
-        'Cache-Control': 'public, max-age=86400, s-maxage=86400',
+        'Cache-Control': 'public, max-age=604800, s-maxage=604800, immutable',
         'Access-Control-Allow-Origin': '*',
       },
     });

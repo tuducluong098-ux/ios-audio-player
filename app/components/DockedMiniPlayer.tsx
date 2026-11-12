@@ -26,7 +26,7 @@ interface DockedMiniPlayerProps {
 /**
  * Thanh Mini Player nổi tự thu gọn phía trên Dock khi cuộn xuống hoặc khi lướt sang trang Tìm kiếm (#218).
  */
-export function DockedMiniPlayer({
+export const DockedMiniPlayer = React.memo(function DockedMiniPlayer({
   track,
   targetRef,
   isPlaying,
@@ -92,6 +92,8 @@ export function DockedMiniPlayer({
             <img
               src={`/api/image-proxy?url=${encodeURIComponent(track.thumbnail)}`}
               alt={track.title}
+              loading="lazy"
+              decoding="async"
               className={`w-11 h-11 rounded-xl object-cover border border-cyan-300/35 transition-transform duration-500 ${
                 isPlaying ? 'scale-100' : 'scale-95 opacity-85'
               }`}
@@ -150,4 +152,4 @@ export function DockedMiniPlayer({
       </div>
     </aside>
   );
-}
+});

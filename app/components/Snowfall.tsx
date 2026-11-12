@@ -33,7 +33,7 @@ const SNOWFLAKES: Snowflake[] = Array.from({ length: 16 }, (_, i) => {
 /**
  * Hiệu ứng hạt ánh sáng tuyết rơi mượt 60fps trên GPU iPhone Safari.
  */
-export function Snowfall() {
+export const Snowfall = React.memo(function Snowfall() {
   return (
     <div
       aria-hidden="true"
@@ -61,4 +61,4 @@ export function Snowfall() {
       ))}
     </div>
   );
-}
+});

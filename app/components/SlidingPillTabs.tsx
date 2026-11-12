@@ -19,7 +19,7 @@ interface SlidingPillTabsProps<T extends string> {
 /**
  * Thanh Tab với viên pill gradient trượt co giãn đàn hồi & điều hướng phím (#039).
  */
-export function SlidingPillTabs<T extends string>({
+function SlidingPillTabsInner<T extends string>({
   tabs,
   activeTab,
   onChange,
@@ -104,3 +104,5 @@ export function SlidingPillTabs<T extends string>({
     </div>
   );
 }
+
+export const SlidingPillTabs = React.memo(SlidingPillTabsInner) as typeof SlidingPillTabsInner;

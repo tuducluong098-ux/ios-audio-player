@@ -40,7 +40,7 @@ let cachedScClientIdAt = 0;
 const SC_CLIENT_ID_TTL = 12 * 60 * 60 * 1000;
 
 /**
- * Lấy SoundCloud client_id công khai và cache trong process
+ * Lấy SoundCloud client_id công khai và cache trong process (tải song song các bundle để tránh timeout 10s)
  */
 export async function getSoundCloudClientId(forceRefresh = false): Promise<string> {
   if (
@@ -53,7 +53,7 @@ export async function getSoundCloudClientId(forceRefresh = false): Promise<strin
 
   const pageRes = await fetch('https://soundcloud.com', {
     headers: { 'User-Agent': DESKTOP_UA },
-    signal: AbortSignal.timeout(6000),
+    signal: AbortSignal.timeout(3800),
   });
 
   if (!pageRes.ok) {
@@ -63,22 +63,27 @@ export async function getSoundCloudClientId(forceRefresh = false): Promise<strin
   const html = await pageRes.text();
   const scriptUrls = Array.from(
     html.matchAll(/src="(https:\/\/a-v2\.sndcdn\.com\/assets\/[^"]+\.js)"/g)
-  ).map((m) => m[1]);
+  )
+    .map((m) => m[1])
+    .slice(-5)
+    .reverse();
 
-  for (const scriptUrl of scriptUrls.slice(-6).reverse()) {
+  if (scriptUrls.length > 0) {
     try {
-      const jsRes = await fetch(scriptUrl, { signal: AbortSignal.timeout(4000) });
-      if (!jsRes.ok) continue;
-      const jsText = await jsRes.text();
-      const match = jsText.match(/client_id[:=]"?([a-zA-Z0-9]{32})"?/);
-      if (match?.[1]) {
-        cachedScClientId = match[1];
-        cachedScClientIdAt = Date.now();
-        return match[1];
-      }
-    } catch {
-      continue;
-    }
+      const foundId = await Promise.any(
+        scriptUrls.map(async (scriptUrl) => {
+          const jsRes = await fetch(scriptUrl, { signal: AbortSignal.timeout(2800) });
+          if (!jsRes.ok) throw new Error('bad script status');
+          const jsText = await jsRes.text();
+          const match = jsText.match(/client_id[:=]"?([a-zA-Z0-9]{32})"?/);
+          if (!match?.[1]) throw new Error('missing client_id');
+          return match[1];
+        })
+      );
+      cachedScClientId = foundId;
+      cachedScClientIdAt = Date.now();
+      return foundId;
+    } catch {}
   }
 
   throw new Error('Không tìm thấy mã truy cập công khai của SoundCloud.');
@@ -103,10 +108,14 @@ interface ScTrackRaw {
   permalink_url?: string;
   artwork_url?: string;
   track_authorization?: string;
+  snipped?: boolean;
+  policy?: string;
+  duration?: number;
   user?: { username?: string; avatar_url?: string };
   media?: {
     transcodings?: Array<{
       url: string;
+      snipped?: boolean;
       format?: { protocol?: string; mime_type?: string };
     }>;
   };
@@ -116,18 +125,23 @@ interface ScTrackRaw {
 async function resolveSoundCloudStream(
   track: ScTrackRaw,
   clientId: string
-): Promise<{ audioUrl: string; mimeType: string } | null> {
+): Promise<{ audioUrl: string; mimeType: string; isPreview: boolean } | null> {
   const transcodings = track?.media?.transcodings || [];
   if (transcodings.length === 0) return null;
 
   const sorted = [...transcodings].sort((a, b) => {
     const score = (t: typeof a) => {
-      if (t.format?.protocol === 'progressive') return 0;
-      if (t.format?.protocol === 'hls' && t.format?.mime_type?.includes('audio/mp4')) return 1;
-      return 2;
+      const snipPenalty = t.snipped ? 10 : 0;
+      if (t.format?.protocol === 'progressive') return snipPenalty + 0;
+      if (t.format?.protocol === 'hls' && t.format?.mime_type?.includes('audio/mp4')) {
+        return snipPenalty + 1;
+      }
+      return snipPenalty + 2;
     };
     return score(a) - score(b);
   });
+
+  let fallbackPreview: { audioUrl: string; mimeType: string; isPreview: boolean } | null = null;
 
   for (const candidate of sorted) {
     try {
@@ -139,7 +153,7 @@ async function resolveSoundCloudStream(
 
       const streamRes = await fetch(endpoint.toString(), {
         headers: { Accept: 'application/json' },
-        signal: AbortSignal.timeout(4500),
+        signal: AbortSignal.timeout(3500),
       });
       if (!streamRes.ok) continue;
 
@@ -149,14 +163,26 @@ async function resolveSoundCloudStream(
           candidate.format?.protocol === 'hls' && streamJson.url.includes('.m3u8')
             ? 'application/vnd.apple.mpegurl'
             : candidate.format?.mime_type?.split(';')[0] || 'audio/mpeg';
-        return { audioUrl: streamJson.url, mimeType };
+        const isPreview =
+          Boolean(track.snipped) ||
+          Boolean(candidate.snipped) ||
+          track.policy === 'SNIP' ||
+          /\/preview\b/i.test(candidate.url) ||
+          /\/preview\b/i.test(streamJson.url);
+
+        if (!isPreview) {
+          return { audioUrl: streamJson.url, mimeType, isPreview: false };
+        }
+        if (!fallbackPreview) {
+          fallbackPreview = { audioUrl: streamJson.url, mimeType, isPreview: true };
+        }
       }
     } catch {
       continue;
     }
   }
 
-  return null;
+  return fallbackPreview;
 }
 
 /**
@@ -428,7 +454,7 @@ interface FallbackTrackMeta {
 }
 
 /**
- * Tìm & giải mã luồng phát trực tiếp từ SoundCloud theo từ khóa
+ * Tìm & giải mã luồng phát trực tiếp từ SoundCloud theo từ khóa (ưu tiên bản full, tránh Go+ preview 30s)
  */
 async function searchSoundCloudAudio(
   query: string,
@@ -440,35 +466,48 @@ async function searchSoundCloudAudio(
     const searchRes = await fetch(
       `https://api-v2.soundcloud.com/search/tracks?q=${encodeURIComponent(
         query
-      )}&limit=6&client_id=${cid}`,
-      { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(4500) }
+      )}&limit=8&client_id=${cid}`,
+      { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(3500) }
     );
     if (!searchRes.ok) return null;
 
     const searchJson = await searchRes.json();
     const tracks = (searchJson?.collection || []) as ScTrackRaw[];
-    for (const scTrack of tracks) {
+    // Ưu tiên bản full trước, chỉ xét track bị cắt SNIP/preview sau cùng
+    const prioritized = [...tracks].sort((a, b) => {
+      const aSnip = a.snipped || a.policy === 'SNIP' ? 1 : 0;
+      const bSnip = b.snipped || b.policy === 'SNIP' ? 1 : 0;
+      return aSnip - bSnip;
+    });
+
+    let previewBackup: ExtractedAudio | null = null;
+    for (const scTrack of prioritized) {
       const stream = await resolveSoundCloudStream(scTrack, cid);
-      if (stream) {
-        const thumb = (
-          meta?.thumbnail ||
-          scTrack.artwork_url ||
-          scTrack.user?.avatar_url ||
-          'https://placehold.co/512x512/18181b/ffffff.jpg?text=Audio'
-        ).replace('-large', '-t500x500');
-        return {
-          id: meta?.id || `sc_${scTrack.id || Date.now()}`,
-          originalUrl: meta?.originalUrl || scTrack.permalink_url || '',
-          audioUrl: stream.audioUrl,
-          title: meta?.title || scTrack.title || query,
-          author: meta?.author || scTrack.user?.username || 'Artist',
-          thumbnail: thumb,
-          source: meta?.source && meta.source !== 'youtube' ? meta.source : 'soundcloud',
-          mimeType: stream.mimeType,
-          extractedAt: Date.now(),
-        };
-      }
+      if (!stream) continue;
+
+      const thumb = (
+        meta?.thumbnail ||
+        scTrack.artwork_url ||
+        scTrack.user?.avatar_url ||
+        'https://placehold.co/512x512/18181b/ffffff.jpg?text=Audio'
+      ).replace('-large', '-t500x500');
+      const built: ExtractedAudio = {
+        id: meta?.id || `sc_${scTrack.id || Date.now()}`,
+        originalUrl: meta?.originalUrl || scTrack.permalink_url || '',
+        audioUrl: stream.audioUrl,
+        title: meta?.title || scTrack.title || query,
+        author: meta?.author || scTrack.user?.username || 'Artist',
+        thumbnail: thumb,
+        source: meta?.source && meta.source !== 'youtube' ? meta.source : 'soundcloud',
+        mimeType: stream.mimeType,
+        extractedAt: Date.now(),
+      };
+
+      if (!stream.isPreview) return built;
+      if (!previewBackup) previewBackup = built;
     }
+
+    if (previewBackup) return previewBackup;
   } catch {}
   return null;
 }
@@ -483,7 +522,7 @@ async function probeAudioRange(url: string, referer?: string): Promise<boolean> 
     const res = await fetch(url, {
       headers,
       redirect: 'follow',
-      signal: AbortSignal.timeout(2500),
+      signal: AbortSignal.timeout(1600),
     });
     try {
       await res.body?.cancel();
@@ -501,8 +540,66 @@ function wrapYouTubeProxyIfNeeded(directUrl: string): string {
   return directUrl;
 }
 
+const extractedCache = new Map<string, { item: ExtractedAudio; at: number }>();
+
+export function getCachedExtraction(url: string): ExtractedAudio | null {
+  const key = url.trim();
+  const hit = extractedCache.get(key);
+  if (!hit) return null;
+  const maxAge = hit.item.source === 'soundcloud' ? 3 * 60 * 1000 : 15 * 60 * 1000;
+  if (Date.now() - hit.at > maxAge) {
+    extractedCache.delete(key);
+    return null;
+  }
+  return hit.item;
+}
+
+export function cacheExtractionResult(url: string, item: ExtractedAudio) {
+  const key = url.trim();
+  if (extractedCache.size >= 45) {
+    const oldest = extractedCache.keys().next().value;
+    if (oldest) extractedCache.delete(oldest);
+  }
+  extractedCache.set(key, { item, at: Date.now() });
+}
+
+function pickOptimalAudioFormat(
+  formats: readonly {
+    url?: string;
+    hasAudio?: boolean;
+    hasVideo?: boolean;
+    container?: string;
+    audioBitrate?: number;
+    bitrate?: number;
+    mimeType?: string;
+  }[]
+) {
+  const audioOnlyMp4 = formats
+    .filter((f) => f.hasAudio && !f.hasVideo && f.container === 'mp4')
+    .sort((a, b) => {
+      // Ưu tiên M4A 96-160kbps (~1MB/phút) để nghe mượt, không lãng phí 5G
+      const aRate = a.audioBitrate || 128;
+      const bRate = b.audioBitrate || 128;
+      const aScore = aRate >= 96 && aRate <= 160 ? Math.abs(aRate - 128) : 500 + aRate;
+      const bScore = bRate >= 96 && bRate <= 160 ? Math.abs(bRate - 128) : 500 + bRate;
+      return aScore - bScore;
+    });
+  if (audioOnlyMp4[0]) return audioOnlyMp4[0];
+
+  const anyAudioOnly = formats
+    .filter((f) => f.hasAudio && !f.hasVideo)
+    .sort((a, b) => (a.audioBitrate || 128) - (b.audioBitrate || 128));
+  if (anyAudioOnly[0]) return anyAudioOnly[0];
+
+  // Fallback cuối cùng nếu chỉ còn muxed video -> chọn dung lượng nhỏ nhất để đỡ tốn 5G
+  const muxed = formats
+    .filter((f) => f.hasAudio)
+    .sort((a, b) => (a.bitrate || 9999999) - (b.bitrate || 9999999));
+  return muxed[0] || null;
+}
+
 /**
- * Trích xuất YouTube (ưu tiên M4A/MP4 + proxy tránh lỗi IP Vercel/5G + fallback SoundCloud tự động)
+ * Trích xuất YouTube (tối ưu M4A ~128kbps tiết kiệm 5G + chạy song song oEmbed/Fallback tránh timeout 10s Vercel)
  */
 export async function extractYouTube(
   url: string,
@@ -519,80 +616,109 @@ export async function extractYouTube(
     fallbackMeta?.thumbnail ||
     (videoIdMatch ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` : '');
 
-  try {
-    const info = await ytdl.getInfo(url, { signal: AbortSignal.timeout(5500) });
-    detectedTitle = detectedTitle || info.videoDetails.title || '';
-    detectedAuthor = detectedAuthor || info.videoDetails.author?.name || '';
+  const needOembed = Boolean(videoIdMatch && (!detectedTitle || !detectedAuthor));
 
-    const directFormats = info.formats.filter((f) => Boolean(f.url) && !f.isDrm && !f.isOtf);
+  const [ytdlSettled, oembedSettled] = await Promise.allSettled([
+    ytdl.getInfo(url, { signal: AbortSignal.timeout(3800) }),
+    needOembed
+      ? fetch(
+          `https://www.youtube.com/oembed?url=${encodeURIComponent(
+            `https://www.youtube.com/watch?v=${videoId}`
+          )}&format=json`,
+          { signal: AbortSignal.timeout(2000) }
+        ).then((r) => (r.ok ? r.json() : null))
+      : Promise.resolve(null),
+  ]);
 
-    let chosenFormat = null;
-    try {
-      chosenFormat = chooseFormat(directFormats, {
-        quality: Quality.HighestAudio,
-        filter: [
-          { hasAudio: true, hasVideo: false, container: 'mp4' },
-          { hasAudio: true, hasVideo: false },
-          { hasAudio: true, container: 'mp4' },
-          { hasAudio: true },
-        ],
-      });
-    } catch {
-      chosenFormat =
-        directFormats.find((f) => f.hasAudio && !f.hasVideo && f.container === 'mp4') ||
-        directFormats.find((f) => f.hasAudio && !f.hasVideo) ||
-        directFormats.find((f) => f.hasAudio) ||
-        null;
-    }
-
-    if (chosenFormat?.url) {
-      const thumbnails = info.videoDetails.thumbnails;
-      const bestThumb =
-        detectedThumb ||
-        thumbnails.find((t) => t.url.includes('.jpg'))?.url ||
-        thumbnails[thumbnails.length - 1]?.url ||
-        `https://i.ytimg.com/vi/${info.videoDetails.id || videoId}/hqdefault.jpg`;
-
-      // Kiểm chứng nhanh stream không bị 403 trên IP server trước khi trả về client
-      const ok = await probeAudioRange(chosenFormat.url, 'https://www.youtube.com/');
-      if (ok) {
-        return {
-          id: `yt_${info.videoDetails.id || videoId}`,
-          originalUrl: url,
-          audioUrl: wrapYouTubeProxyIfNeeded(chosenFormat.url),
-          title: detectedTitle || 'YouTube Audio',
-          author: detectedAuthor || 'YouTube Channel',
-          thumbnail: bestThumb,
-          source: 'youtube',
-          mimeType: chosenFormat.mimeType?.split(';')[0] || 'audio/mp4',
-          extractedAt: Date.now(),
-        };
-      }
-    }
-  } catch (ytdlError) {
-    console.warn('ytdl-core v5 gặp sự cố, chuyển fallback...', ytdlError);
+  if (oembedSettled.status === 'fulfilled' && oembedSettled.value) {
+    const oe = oembedSettled.value as {
+      title?: string;
+      author_name?: string;
+      thumbnail_url?: string;
+    };
+    detectedTitle = detectedTitle || oe?.title || '';
+    detectedAuthor = detectedAuthor || oe?.author_name || '';
+    detectedThumb = detectedThumb || oe?.thumbnail_url || '';
   }
 
-  // Fallback 1: Đọc metadata qua YouTube oEmbed nếu chưa có title/author
-  if (videoIdMatch && (!detectedTitle || !detectedAuthor)) {
+  if (ytdlSettled.status === 'fulfilled' && ytdlSettled.value) {
     try {
-      const oeRes = await fetch(
-        `https://www.youtube.com/oembed?url=${encodeURIComponent(
-          `https://www.youtube.com/watch?v=${videoId}`
-        )}&format=json`,
-        { signal: AbortSignal.timeout(2500) }
-      );
-      if (oeRes.ok) {
-        const oe = await oeRes.json();
-        detectedTitle = detectedTitle || oe?.title || '';
-        detectedAuthor = detectedAuthor || oe?.author_name || '';
-        detectedThumb = detectedThumb || oe?.thumbnail_url || '';
+      const info = ytdlSettled.value;
+      detectedTitle = detectedTitle || info.videoDetails.title || '';
+      detectedAuthor = detectedAuthor || info.videoDetails.author?.name || '';
+
+      const directFormats = info.formats.filter((f) => Boolean(f.url) && !f.isDrm && !f.isOtf);
+      let chosenFormat = pickOptimalAudioFormat(directFormats);
+      if (!chosenFormat) {
+        try {
+          chosenFormat = chooseFormat(directFormats, {
+            quality: Quality.HighestAudio,
+            filter: [{ hasAudio: true, hasVideo: false }],
+          });
+        } catch {}
+      }
+
+      if (chosenFormat?.url) {
+        const thumbnails = info.videoDetails.thumbnails;
+        const bestThumb =
+          detectedThumb ||
+          thumbnails.find((t) => t.url.includes('.jpg'))?.url ||
+          thumbnails[thumbnails.length - 1]?.url ||
+          `https://i.ytimg.com/vi/${info.videoDetails.id || videoId}/hqdefault.jpg`;
+
+        const ok = await probeAudioRange(chosenFormat.url, 'https://www.youtube.com/');
+        if (ok) {
+          return {
+            id: `yt_${info.videoDetails.id || videoId}`,
+            originalUrl: url,
+            audioUrl: wrapYouTubeProxyIfNeeded(chosenFormat.url),
+            title: detectedTitle || 'YouTube Audio',
+            author: detectedAuthor || 'YouTube Channel',
+            thumbnail: bestThumb,
+            source: 'youtube',
+            mimeType: chosenFormat.mimeType?.split(';')[0] || 'audio/mp4',
+            extractedAt: Date.now(),
+          };
+        }
       }
     } catch {}
   }
 
-  // Fallback 2: Tự động tìm bản full tương ứng trên SoundCloud (ổn định trên IP Vercel)
-  if (detectedTitle) {
+  // Fallback 1 + 2 song song: thử Piped audio-only & tìm bản full tương ứng trên SoundCloud (tối ưu trong giới hạn 10s Vercel)
+  const pipedPromise: Promise<ExtractedAudio | null> = videoIdMatch
+    ? fetch(`https://api.piped.private.coffee/streams/${videoId}`, {
+        headers: { Accept: 'application/json' },
+        signal: AbortSignal.timeout(2200),
+      })
+        .then(async (res) => {
+          if (!res.ok) return null;
+          const data = await res.json();
+          const audioStreams: Array<{ url: string; mimeType: string }> =
+            data.audioStreams || [];
+          const m4aStream =
+            audioStreams.find((s) => s.mimeType?.includes('audio/mp4')) ||
+            audioStreams[0];
+          if (!m4aStream?.url) return null;
+          return {
+            id: `yt_${videoId}`,
+            originalUrl: url,
+            audioUrl: m4aStream.url,
+            title: detectedTitle || data.title || 'YouTube Audio',
+            author: detectedAuthor || data.uploader || 'YouTube',
+            thumbnail:
+              detectedThumb ||
+              data.thumbnailUrl ||
+              `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+            source: 'youtube',
+            mimeType: m4aStream.mimeType || 'audio/mp4',
+            extractedAt: Date.now(),
+          } satisfies ExtractedAudio;
+        })
+        .catch(() => null)
+    : Promise.resolve(null);
+
+  const scFallbackPromise: Promise<ExtractedAudio | null> = (async () => {
+    if (!detectedTitle) return null;
     const cleanAuthor = detectedAuthor.replace(/\s*-\s*Topic$/i, '').trim();
     const { query } = cleanTrackQuery(detectedTitle, cleanAuthor);
 
@@ -607,53 +733,24 @@ export async function extractYouTube(
     if (scByFullQuery) return scByFullQuery;
 
     if (cleanAuthor) {
-      const scByTitleOnly = await searchSoundCloudAudio(
-        cleanTrackQuery(detectedTitle).query,
-        {
-          id: `yt_${videoId}`,
-          originalUrl: url,
-          title: detectedTitle,
-          author: cleanAuthor,
-          thumbnail: detectedThumb || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
-          source: 'soundcloud',
-        }
-      );
-      if (scByTitleOnly) return scByTitleOnly;
-    }
-  }
-
-  // Fallback 3: Piped instance công khai
-  if (videoIdMatch) {
-    try {
-      const res = await fetch(`https://api.piped.private.coffee/streams/${videoId}`, {
-        headers: { Accept: 'application/json' },
-        signal: AbortSignal.timeout(2500),
+      return await searchSoundCloudAudio(cleanTrackQuery(detectedTitle).query, {
+        id: `yt_${videoId}`,
+        originalUrl: url,
+        title: detectedTitle,
+        author: cleanAuthor,
+        thumbnail: detectedThumb || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+        source: 'soundcloud',
       });
-      if (res.ok) {
-        const data = await res.json();
-        const audioStreams: Array<{ url: string; mimeType: string }> = data.audioStreams || [];
-        const m4aStream =
-          audioStreams.find((s) => s.mimeType?.includes('audio/mp4')) || audioStreams[0];
+    }
+    return null;
+  })();
 
-        if (m4aStream?.url) {
-          return {
-            id: `yt_${videoId}`,
-            originalUrl: url,
-            audioUrl: m4aStream.url,
-            title: detectedTitle || data.title || 'YouTube Audio',
-            author: detectedAuthor || data.uploader || 'YouTube',
-            thumbnail:
-              detectedThumb ||
-              data.thumbnailUrl ||
-              `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
-            source: 'youtube',
-            mimeType: m4aStream.mimeType || 'audio/mp4',
-            extractedAt: Date.now(),
-          };
-        }
-      }
-    } catch {}
-  }
+  const [scResult, pipedResult] = await Promise.allSettled([
+    scFallbackPromise,
+    pipedPromise,
+  ]);
+  if (scResult.status === 'fulfilled' && scResult.value) return scResult.value;
+  if (pipedResult.status === 'fulfilled' && pipedResult.value) return pipedResult.value;
 
   throw new Error(
     'Không thể trích xuất âm thanh YouTube lúc này. Vui lòng thử bài khác hoặc tìm bản SoundCloud/TikTok trong tab Gợi ý.'
@@ -1238,8 +1335,8 @@ function mapTikWmVideos(videos: readonly TikWmVideoRaw[]): SuggestedTrack[] {
       title: v.title?.trim() || v.music_info?.title || 'TikTok Sound',
       author: v.author?.nickname || v.music_info?.author || 'TikTok',
       thumbnail:
-        v.origin_cover ||
         v.cover ||
+        v.origin_cover ||
         v.author?.avatar ||
         'https://placehold.co/512x512/18181b/ffffff.jpg?text=TikTok',
       source: 'tiktok',

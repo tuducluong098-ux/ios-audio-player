@@ -5,6 +5,8 @@ import {
   extractYouTube,
   extractSpotify,
   searchAndExtractByQuery,
+  getCachedExtraction,
+  cacheExtractionResult,
 } from '@/lib/audio-providers';
 
 export const runtime = 'nodejs';
@@ -19,13 +21,20 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Vui lòng nhập đường dẫn (URL).' }, { status: 400 });
     }
 
+    const forceRefresh = Boolean(body?.forceRefresh);
+
     // Hỗ trợ lazy-resolve cho các bài trong Spotify Playlist hoặc từ Gợi ý
     if (rawInput.startsWith('spotify-search://')) {
+      if (!forceRefresh) {
+        const cached = getCachedExtraction(rawInput);
+        if (cached) return NextResponse.json(cached, { status: 200 });
+      }
       const query = decodeURIComponent(rawInput.replace('spotify-search://', ''));
       const track = await searchAndExtractByQuery(query, {
         originalUrl: rawInput,
         source: 'spotify',
       });
+      cacheExtractionResult(rawInput, track);
       return NextResponse.json(track, { status: 200 });
     }
 
@@ -70,12 +79,20 @@ export async function POST(req: NextRequest) {
           }
         : undefined;
 
+    if (!forceRefresh && !isSpotify) {
+      const cached = getCachedExtraction(rawUrl);
+      if (cached) {
+        return NextResponse.json(cached, { status: 200 });
+      }
+    }
+
     const result = isTikTok
       ? await extractTikTok(rawUrl)
       : isSoundCloud
       ? await extractSoundCloud(rawUrl)
       : await extractYouTube(rawUrl, fallbackMeta);
 
+    cacheExtractionResult(rawUrl, result);
     return NextResponse.json(result, { status: 200 });
   } catch (err: unknown) {
     const message =

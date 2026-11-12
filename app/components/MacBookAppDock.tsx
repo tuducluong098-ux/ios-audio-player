@@ -28,7 +28,7 @@ const GAP_PX = 14;
  * rê chuột hoặc lướt ngón tay sẽ phóng to mượt các icon lân cận theo đường cong Gaussian,
  * hiện tên nhãn phía trên, nảy nhịp khi chọn và sáng chấm xanh chỉ trang đang mở.
  */
-export function MacBookAppDock({
+export const MacBookAppDock = React.memo(function MacBookAppDock({
   items,
   ariaLabel = 'Thanh điều hướng kiểu MacBook',
 }: MacBookAppDockProps) {
@@ -226,4 +226,4 @@ export function MacBookAppDock({
       <div ref={tipRef} className="ux u208-tip" aria-hidden="true" />
     </>
   );
-}
+});

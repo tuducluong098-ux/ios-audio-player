@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import {
   Play,
   SkipBack,
@@ -234,6 +234,11 @@ export default function AudioPlayerPage() {
   const discoverSeedTrackRef = useRef<SuggestedTrack | null>(null);
   const usedChainSeedsRef = useRef<Set<string>>(new Set());
   const coldDiscoveryOffsetRef = useRef<number>(0);
+  const relatedCacheRef = useRef<
+    Map<string, { list: SuggestedTrack[]; nextOffset: number; hasMore: boolean }>
+  >(new Map());
+  const relatedFetchingForRef = useRef<string | null>(null);
+  const lastUiSecondRef = useRef<number>(-1);
 
   useEffect(() => {
     queueRef.current = queue;
@@ -333,7 +338,7 @@ export default function AudioPlayerPage() {
   useEffect(() => {
     const timer = setTimeout(() => {
       setIsBootLoading(false);
-    }, 700);
+    }, 250);
     return () => {
       clearTimeout(timer);
       if (successTimerRef.current) clearTimeout(successTimerRef.current);
@@ -454,7 +459,7 @@ export default function AudioPlayerPage() {
       } catch {
         setSyncStatus('error');
       }
-    }, 1200);
+    }, 2500);
 
     return () => clearTimeout(timer);
   }, [playlists, history, queue, syncSession]);
@@ -491,102 +496,126 @@ export default function AudioPlayerPage() {
     showToast(enabled ? 'Đã bật Gợi ý & Tự phát tiếp' : 'Đã tắt tính năng Gợi ý');
   };
 
-  // Tự động lấy danh sách Gợi ý (Related Tracks) khi đổi bài đang phát
+  // Hàm lấy danh sách Gợi ý (có cache tại client để tránh tốn 5G khi lướt qua lại)
+  const ensureRelatedForTrack = useCallback(
+    async (track: TrackData, signal?: AbortSignal): Promise<SuggestedTrack[]> => {
+      if (!suggestionsEnabledRef.current || !track?.originalUrl) return [];
+
+      const cacheKey = `${track.id}|${track.originalUrl}`;
+      const cached = relatedCacheRef.current.get(cacheKey);
+      if (cached) {
+        setSuggestions(cached.list);
+        suggestionsRef.current = cached.list;
+        setSuggestHasMore(cached.hasMore);
+        setSuggestOffset(cached.nextOffset);
+        return cached.list;
+      }
+
+      if (relatedFetchingForRef.current === cacheKey) {
+        return suggestionsRef.current;
+      }
+
+      relatedFetchingForRef.current = cacheKey;
+      setLoadingSuggestions(true);
+
+      try {
+        const res = await fetch('/api/related', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            offset: 0,
+            limit: 12,
+            track: {
+              id: track.id,
+              originalUrl: track.originalUrl,
+              title: track.title,
+              author: track.author,
+              source: track.source,
+            },
+          }),
+          signal,
+        });
+        const json = await res.json();
+        if (signal?.aborted) return [];
+
+        if (Array.isArray(json?.suggestions)) {
+          const list = json.suggestions as SuggestedTrack[];
+          const hasMore = Boolean(json?.hasMore) || list.length >= 4;
+          const nextOffset = Number(json?.nextOffset ?? list.length);
+
+          if (relatedCacheRef.current.size >= 20) {
+            const oldestKey = relatedCacheRef.current.keys().next().value;
+            if (oldestKey) relatedCacheRef.current.delete(oldestKey);
+          }
+          relatedCacheRef.current.set(cacheKey, { list, hasMore, nextOffset });
+
+          setSuggestions(list);
+          suggestionsRef.current = list;
+          setSuggestHasMore(hasMore);
+          setSuggestOffset(nextOffset);
+          return list;
+        }
+      } catch {
+      } finally {
+        if (relatedFetchingForRef.current === cacheKey) {
+          relatedFetchingForRef.current = null;
+        }
+        if (!signal?.aborted) {
+          setLoadingSuggestions(false);
+        }
+      }
+
+      return [];
+    },
+    []
+  );
+
+  // Chỉ tải Gợi ý khi người dùng mở trang Tìm & Gợi ý (không tự chạy nền + extract ngầm khi đang nghe trên trang chủ -> tiết kiệm 5G)
   useEffect(() => {
     if (!suggestionsEnabled || !currentTrack) {
       if (!suggestionsEnabled) {
         setSuggestions([]);
+        suggestionsRef.current = [];
         setSuggestOffset(0);
         setSuggestHasMore(false);
       }
       return;
     }
 
-    const controller = new AbortController();
-    let prefetchTimer: number | null = null;
     discoverSeedTrackRef.current = null;
     usedChainSeedsRef.current.clear();
     if (currentTrack.originalUrl) {
       usedChainSeedsRef.current.add(currentTrack.originalUrl);
     }
-    setLoadingSuggestions(true);
+
+    const cacheKey = `${currentTrack.id}|${currentTrack.originalUrl}`;
+    const cached = relatedCacheRef.current.get(cacheKey);
+    if (cached) {
+      setSuggestions(cached.list);
+      suggestionsRef.current = cached.list;
+      setSuggestHasMore(cached.hasMore);
+      setSuggestOffset(cached.nextOffset);
+      return;
+    }
+
+    // Chưa sang trang Tìm & Gợi ý -> không tự tải nền để tránh tốn 5G & CPU
+    if (activePage !== 'discover') {
+      setSuggestions([]);
+      suggestionsRef.current = [];
+      setSuggestOffset(0);
+      setSuggestHasMore(false);
+      return;
+    }
+
+    const controller = new AbortController();
     setSuggestOffset(0);
     setSuggestHasMore(false);
-
-    fetch('/api/related', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        offset: 0,
-        limit: 12,
-        track: {
-          id: currentTrack.id,
-          originalUrl: currentTrack.originalUrl,
-          title: currentTrack.title,
-          author: currentTrack.author,
-          source: currentTrack.source,
-        },
-      }),
-      signal: controller.signal,
-    })
-      .then((res) => res.json())
-      .then((json) => {
-        if (Array.isArray(json?.suggestions)) {
-          const list = json.suggestions as SuggestedTrack[];
-          setSuggestions(list);
-          setSuggestHasMore(Boolean(json?.hasMore) || list.length >= 4);
-          setSuggestOffset(Number(json?.nextOffset ?? list.length));
-
-          // Prefetch ngầm bài gợi ý top 1 sau 1.2s để bấm nghe là phát tức thì
-          const topItem = list[0];
-          if (topItem?.url && !prefetchedSuggestCacheRef.current.has(topItem.url)) {
-            prefetchTimer = window.setTimeout(() => {
-              if (controller.signal.aborted) return;
-              fetch('/api/extract', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  url: topItem.url,
-                  fallbackMeta: {
-                    title: topItem.title,
-                    author: topItem.author,
-                    thumbnail: topItem.thumbnail,
-                  },
-                }),
-                signal: controller.signal,
-              })
-                .then((r) => (r.ok ? r.json() : null))
-                .then((data) => {
-                  if (data && data.audioUrl && !data.error) {
-                    prefetchedSuggestCacheRef.current.set(topItem.url, {
-                      ...(data as TrackData),
-                      id: topItem.id,
-                      title: topItem.title || data.title,
-                      author: topItem.author || data.author,
-                      thumbnail: topItem.thumbnail || data.thumbnail,
-                      source: data.source || topItem.source,
-                    });
-                  }
-                })
-                .catch(() => {});
-            }, 1200);
-          }
-        }
-      })
-      .catch(() => {})
-      .finally(() => {
-        if (!controller.signal.aborted) {
-          setLoadingSuggestions(false);
-        }
-      });
+    void ensureRelatedForTrack(currentTrack, controller.signal);
 
     return () => {
       controller.abort();
-      if (prefetchTimer !== null) {
-        window.clearTimeout(prefetchTimer);
-      }
     };
-  }, [currentTrack?.id, currentTrack?.originalUrl, suggestionsEnabled]);
+  }, [activePage, currentTrack, ensureRelatedForTrack, suggestionsEnabled]);
 
   // Nếu chưa phát bài nào mà người dùng vuốt sang trang Tìm & Gợi ý -> tự nạp bảng gợi ý nhạc hot kiểu YouTube
   useEffect(() => {
@@ -911,12 +940,13 @@ export default function AudioPlayerPage() {
   const fetchExtractRaw = useCallback(
     async (
       url: string,
-      fallbackMeta?: { title?: string; author?: string; thumbnail?: string }
+      fallbackMeta?: { title?: string; author?: string; thumbnail?: string },
+      forceRefresh = false
     ): Promise<ExtractApiResult> => {
       const response = await fetch('/api/extract', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: url.trim(), fallbackMeta }),
+        body: JSON.stringify({ url: url.trim(), fallbackMeta, forceRefresh }),
       });
       const data = await response.json();
       if (!response.ok || data.error) {
@@ -930,9 +960,10 @@ export default function AudioPlayerPage() {
   const fetchFreshTrack = useCallback(
     async (
       url: string,
-      fallbackMeta?: { title?: string; author?: string; thumbnail?: string }
+      fallbackMeta?: { title?: string; author?: string; thumbnail?: string },
+      forceRefresh = false
     ): Promise<TrackData> => {
-      const result = await fetchExtractRaw(url, fallbackMeta);
+      const result = await fetchExtractRaw(url, fallbackMeta, forceRefresh);
       if ('isBatch' in result && result.isBatch) {
         return result.tracks[0];
       }
@@ -951,11 +982,15 @@ export default function AudioPlayerPage() {
 
       if (!isExpired) return track;
 
-      const refreshed = await fetchFreshTrack(track.originalUrl, {
-        title: track.title,
-        author: track.author,
-        thumbnail: track.thumbnail,
-      });
+      const refreshed = await fetchFreshTrack(
+        track.originalUrl,
+        {
+          title: track.title,
+          author: track.author,
+          thumbnail: track.thumbnail,
+        },
+        Boolean(track.audioUrl)
+      );
       const merged: TrackData = {
         ...refreshed,
         id: track.id,
@@ -967,6 +1002,9 @@ export default function AudioPlayerPage() {
             : refreshed.thumbnail,
         source: refreshed.source || track.source,
       };
+      queueRef.current = queueRef.current.map((item) =>
+        item.id === track.id ? merged : item
+      );
       setQueue((prev) =>
         prev.map((item) => (item.id === track.id ? merged : item))
       );
@@ -1082,6 +1120,7 @@ export default function AudioPlayerPage() {
       trackRepeatOnceCountRef.current = 0;
       recoveryAttemptsRef.current = 0;
       lastPlayTimeRef.current = 0;
+      lastUiSecondRef.current = -1;
       setCurrentTime(0);
       setDuration(0);
 
@@ -1117,11 +1156,15 @@ export default function AudioPlayerPage() {
       } catch {
         if (playRequestIdRef.current !== reqId) return;
         try {
-          const refreshed = await fetchFreshTrack(targetTrack.originalUrl, {
-            title: targetTrack.title,
-            author: targetTrack.author,
-            thumbnail: targetTrack.thumbnail,
-          });
+          const refreshed = await fetchFreshTrack(
+            targetTrack.originalUrl,
+            {
+              title: targetTrack.title,
+              author: targetTrack.author,
+              thumbnail: targetTrack.thumbnail,
+            },
+            true
+          );
           if (playRequestIdRef.current !== reqId) return;
 
           const merged: TrackData = {
@@ -1132,7 +1175,10 @@ export default function AudioPlayerPage() {
             thumbnail: targetTrack.thumbnail || refreshed.thumbnail,
             source: refreshed.source || targetTrack.source,
           };
-          setQueue((prev) => prev.map((t, idx) => (idx === index ? merged : t)));
+          queueRef.current = queueRef.current.map((t) =>
+            t.id === targetTrack.id ? merged : t
+          );
+          setQueue((prev) => prev.map((t) => (t.id === targetTrack.id ? merged : t)));
           isSwitchingTrackRef.current = false;
           await attachAndPlayAudio(audio, merged);
           if (playRequestIdRef.current !== reqId) return;
@@ -1156,6 +1202,8 @@ export default function AudioPlayerPage() {
     [addToHistory, attachAndPlayAudio, clearStallWatchdog, ensureValidAudioUrl, fetchFreshTrack]
   );
 
+  const recoverSelfRef = useRef<(() => Promise<void>) | null>(null);
+
   // Tự động phục hồi khi mạng chập chờn hoặc link stream bị đứng/lỗi giữa chừng
   const recoverCurrentTrack = useCallback(async () => {
     const audio = audioRef.current;
@@ -1168,25 +1216,52 @@ export default function AudioPlayerPage() {
       !track ||
       isSwitchingTrackRef.current ||
       isRecoveringRef.current ||
-      recoveryAttemptsRef.current >= 2 ||
       audio.src === SILENT_AUDIO_URI
     ) {
       return;
     }
 
+    if (recoveryAttemptsRef.current >= 2) {
+      if (recoveryAttemptsRef.current === 2) {
+        recoveryAttemptsRef.current = 3;
+        clearStallWatchdog();
+        if (q.length > 1) {
+          showToast('Nguồn phát bài này đang lỗi, chuyển sang bài tiếp...');
+          void playTrackAtIndex((idx + 1) % q.length);
+        } else {
+          setError('Không thể phát âm thanh lúc này. Vui lòng thử lại hoặc chọn bài khác.');
+          setIsPlaying(false);
+        }
+      }
+      return;
+    }
+
     isRecoveringRef.current = true;
-    recoveryAttemptsRef.current += 1;
+    const attemptNo = recoveryAttemptsRef.current + 1;
+    recoveryAttemptsRef.current = attemptNo;
     clearStallWatchdog();
 
     const resumeAt = lastPlayTimeRef.current > 1 ? lastPlayTimeRef.current : 0;
 
     try {
-      showToast('Đang tự làm mới kết nối âm thanh...');
-      const refreshed = await fetchFreshTrack(track.originalUrl, {
-        title: track.title,
-        author: track.author,
-        thumbnail: track.thumbnail,
-      });
+      showToast(
+        attemptNo === 1
+          ? 'Đang tự làm mới kết nối âm thanh...'
+          : 'Đang thử kết nối lại nguồn âm thanh (lần 2)...'
+      );
+      const refreshed = await fetchFreshTrack(
+        track.originalUrl,
+        {
+          title: track.title,
+          author: track.author,
+          thumbnail: track.thumbnail,
+        },
+        true
+      );
+      if (queueRef.current[currentIndexRef.current]?.id !== track.id) {
+        return;
+      }
+
       const merged: TrackData = {
         ...refreshed,
         id: track.id,
@@ -1195,7 +1270,10 @@ export default function AudioPlayerPage() {
         thumbnail: track.thumbnail || refreshed.thumbnail,
         source: refreshed.source || track.source,
       };
-      setQueue((prev) => prev.map((t, i) => (i === idx ? merged : t)));
+      queueRef.current = queueRef.current.map((t) =>
+        t.id === track.id ? merged : t
+      );
+      setQueue((prev) => prev.map((t) => (t.id === track.id ? merged : t)));
 
       await attachAndPlayAudio(audio, merged);
 
@@ -1217,11 +1295,44 @@ export default function AudioPlayerPage() {
 
       setIsPlaying(true);
     } catch {
-      // Thử chuyển sang bài kế tiếp nếu bài hiện tại chết hẳn sau 2 lần phục hồi
+      const latestQ = queueRef.current;
+      const latestIdx = currentIndexRef.current;
+      if (latestQ[latestIdx]?.id !== track.id) return;
+
+      if (attemptNo < 2) {
+        const failedTrackId = track.id;
+        setTimeout(() => {
+          if (
+            queueRef.current[currentIndexRef.current]?.id === failedTrackId &&
+            !isSwitchingTrackRef.current
+          ) {
+            void recoverSelfRef.current?.();
+          }
+        }, 700);
+      } else if (latestQ.length > 1) {
+        recoveryAttemptsRef.current = 3;
+        showToast('Không thể phục hồi bài này, chuyển sang bài tiếp...');
+        setTimeout(() => {
+          if (
+            queueRef.current[currentIndexRef.current]?.id === track.id &&
+            !isSwitchingTrackRef.current
+          ) {
+            void playTrackAtIndex((latestIdx + 1) % latestQ.length);
+          }
+        }, 350);
+      } else {
+        recoveryAttemptsRef.current = 3;
+        setError('Mất kết nối nguồn âm thanh. Vui lòng thử phát lại hoặc đổi bài.');
+        setIsPlaying(false);
+      }
     } finally {
       isRecoveringRef.current = false;
     }
-  }, [attachAndPlayAudio, clearStallWatchdog, fetchFreshTrack, showToast]);
+  }, [attachAndPlayAudio, clearStallWatchdog, fetchFreshTrack, playTrackAtIndex, showToast]);
+
+  useEffect(() => {
+    recoverSelfRef.current = recoverCurrentTrack;
+  }, [recoverCurrentTrack]);
 
   const startStallWatchdog = useCallback(() => {
     clearStallWatchdog();
@@ -1266,6 +1377,8 @@ export default function AudioPlayerPage() {
 
     if (audio && audio.currentTime > 5) {
       audio.currentTime = 0;
+      lastUiSecondRef.current = 0;
+      setCurrentTime(0);
       updateMediaSessionPosition();
       return;
     }
@@ -1279,8 +1392,10 @@ export default function AudioPlayerPage() {
       const audio = audioRef.current;
       if (!audio || !audio.src) return;
       const maxDur = audio.duration && isFinite(audio.duration) ? audio.duration : 999999;
-      audio.currentTime = Math.min(Math.max(audio.currentTime + seconds, 0), maxDur);
-      setCurrentTime(audio.currentTime);
+      const nextTime = Math.min(Math.max(audio.currentTime + seconds, 0), maxDur);
+      audio.currentTime = nextTime;
+      lastUiSecondRef.current = Math.floor(nextTime);
+      setCurrentTime(nextTime);
       updateMediaSessionPosition();
     },
     [updateMediaSessionPosition]
@@ -1311,11 +1426,7 @@ export default function AudioPlayerPage() {
           ? 'Spotify Background Audio'
           : 'YouTube Background Audio',
       artwork: [
-        { src: proxiedArtworkUrl, sizes: '96x96' },
-        { src: proxiedArtworkUrl, sizes: '128x128' },
-        { src: proxiedArtworkUrl, sizes: '192x192' },
         { src: proxiedArtworkUrl, sizes: '256x256' },
-        { src: proxiedArtworkUrl, sizes: '384x384' },
         { src: proxiedArtworkUrl, sizes: '512x512' },
       ],
     });
@@ -1420,30 +1531,36 @@ export default function AudioPlayerPage() {
 
     playlistRepeatOnceCountRef.current = 0;
 
-    // Nếu đang bật Gợi ý trong Cài đặt -> tự động nối & phát bài gợi ý tiếp theo
-    if (suggestionsEnabledRef.current && suggestionsRef.current.length > 0) {
-      const recentUrls = new Set(q.slice(-6).map((t) => t.originalUrl));
-      const nextSuggestion =
-        suggestionsRef.current.find((s) => !recentUrls.has(s.url)) ||
-        suggestionsRef.current[0];
+    // Nếu đang bật Gợi ý trong Cài đặt -> tự động nối & phát bài gợi ý tiếp theo (lấy on-demand nếu chưa tải)
+    if (suggestionsEnabledRef.current) {
+      let pool = suggestionsRef.current;
+      if (pool.length === 0 && q[idx]) {
+        pool = await ensureRelatedForTrack(q[idx]);
+      }
 
-      if (nextSuggestion) {
-        const queuedTrack: TrackData = {
-          id: nextSuggestion.id,
-          originalUrl: nextSuggestion.url,
-          audioUrl: '',
-          title: nextSuggestion.title,
-          author: nextSuggestion.author,
-          thumbnail: nextSuggestion.thumbnail,
-          source: nextSuggestion.source,
-          mimeType: 'audio/mp4',
-          extractedAt: 0,
-        };
-        const newQueue = [...q, queuedTrack];
-        setQueue(newQueue);
-        queueRef.current = newQueue;
-        playTrackAtIndex(q.length, newQueue);
-        return;
+      if (pool.length > 0) {
+        const recentUrls = new Set(q.slice(-6).map((t) => t.originalUrl));
+        const nextSuggestion =
+          pool.find((s) => !recentUrls.has(s.url)) || pool[0];
+
+        if (nextSuggestion) {
+          const queuedTrack: TrackData = {
+            id: nextSuggestion.id,
+            originalUrl: nextSuggestion.url,
+            audioUrl: '',
+            title: nextSuggestion.title,
+            author: nextSuggestion.author,
+            thumbnail: nextSuggestion.thumbnail,
+            source: nextSuggestion.source,
+            mimeType: 'audio/mp4',
+            extractedAt: 0,
+          };
+          const newQueue = [...q, queuedTrack];
+          setQueue(newQueue);
+          queueRef.current = newQueue;
+          playTrackAtIndex(q.length, newQueue);
+          return;
+        }
       }
     }
 
@@ -1451,7 +1568,7 @@ export default function AudioPlayerPage() {
     if ('mediaSession' in navigator) {
       navigator.mediaSession.playbackState = 'paused';
     }
-  }, [playTrackAtIndex]);
+  }, [ensureRelatedForTrack, playTrackAtIndex]);
 
   useEffect(() => {
     if (audioRef.current) {
@@ -1561,18 +1678,31 @@ export default function AudioPlayerPage() {
     return () => clearInterval(timer);
   }, [sleepTimerMinutes, checkSleepTimerAndFadeOut]);
 
-  // Pre-fetch bài tiếp theo trước khi hết bài 25s (hoặc ngay sau 2s với bài ngắn)
+  // Pre-fetch bài tiếp theo trước khi hết bài 25s (hoặc gợi ý bài cuối trong 35s cuối nếu tắt lặp)
   const maybePrefetchNextTrack = useCallback(() => {
     const audio = audioRef.current;
     if (!audio || !audio.duration || !isFinite(audio.duration)) return;
 
     const timeLeft = audio.duration - audio.currentTime;
     const shouldPrefetchShortTrack = audio.duration <= 25 && audio.currentTime >= 2;
-    if (timeLeft > 25 && !shouldPrefetchShortTrack) return;
-
     const q = queueRef.current;
     const nextIdx = currentIndexRef.current + 1;
-    if (nextIdx >= q.length) return;
+
+    // Nếu đang ở bài cuối cùng & bật Gợi ý & không lặp Playlist -> chuẩn bị danh sách gợi ý trước 35s cuối
+    if (nextIdx >= q.length) {
+      if (
+        (timeLeft <= 35 || shouldPrefetchShortTrack) &&
+        suggestionsEnabledRef.current &&
+        playlistRepeatModeRef.current === 'off' &&
+        suggestionsRef.current.length === 0 &&
+        q[currentIndexRef.current]
+      ) {
+        void ensureRelatedForTrack(q[currentIndexRef.current]);
+      }
+      return;
+    }
+
+    if (timeLeft > 25 && !shouldPrefetchShortTrack) return;
 
     const nextTrack = q[nextIdx];
     const ttl = nextTrack.source === 'soundcloud' ? SOUNDCLOUD_TTL_MS : STREAM_TTL_MS;
@@ -1587,7 +1717,7 @@ export default function AudioPlayerPage() {
         prefetchingTrackIdRef.current = null;
       });
     }
-  }, [ensureValidAudioUrl]);
+  }, [ensureRelatedForTrack, ensureValidAudioUrl]);
 
   const handleManualInputPaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
     const raw = e.clipboardData.getData('text')?.trim();
@@ -1747,6 +1877,7 @@ export default function AudioPlayerPage() {
       if (!audio) return;
       audio.currentTime = newTime;
       lastPlayTimeRef.current = newTime;
+      lastUiSecondRef.current = Math.floor(newTime);
       setCurrentTime(newTime);
       updateMediaSessionPosition();
     },
@@ -2171,6 +2302,92 @@ export default function AudioPlayerPage() {
     ? 'YouTube'
     : null;
 
+  const dockItems = useMemo(
+    () => [
+      {
+        id: 'player',
+        label: 'Nghe nhạc',
+        isActive: activePage === 'player',
+        gradFrom: '#22d3ee',
+        gradTo: '#6366f1',
+        iconPath: (
+          <>
+            <path
+              d="M19 30V15l12-3v15"
+              stroke="#fff"
+              strokeWidth="2.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              fill="none"
+            />
+            <circle cx="15.5" cy="30.5" r="3.8" fill="#fff" />
+            <circle cx="27.5" cy="27.5" r="3.8" fill="#fff" />
+          </>
+        ),
+        onSelect: () => {
+          goToPage('player');
+        },
+      },
+      {
+        id: 'discover',
+        label: 'Tìm & Gợi ý',
+        isActive: activePage === 'discover',
+        gradFrom: '#f43f5e',
+        gradTo: '#ec4899',
+        iconPath: (
+          <>
+            <circle
+              cx="20.5"
+              cy="20.5"
+              r="8"
+              stroke="#fff"
+              strokeWidth="3"
+              fill="none"
+            />
+            <path
+              d="M26.5 26.5l7 7"
+              stroke="#fff"
+              strokeWidth="3.2"
+              strokeLinecap="round"
+            />
+          </>
+        ),
+        onSelect: () => {
+          goToPage('discover');
+        },
+      },
+      {
+        id: 'settings',
+        label: 'Cài đặt',
+        isActive: showSettingsModal,
+        gradFrom: '#475569',
+        gradTo: '#0f172a',
+        iconPath: (
+          <>
+            <circle
+              cx="23"
+              cy="23"
+              r="5.5"
+              stroke="#fff"
+              strokeWidth="2.6"
+              fill="none"
+            />
+            <path
+              d="M23 11v3M23 32v3M11 23h3M32 23h3M14.5 14.5l2.2 2.2M29.3 29.3l2.2 2.2M31.5 14.5l-2.2 2.2M16.7 29.3l-2.2 2.2"
+              stroke="#fff"
+              strokeWidth="2.6"
+              strokeLinecap="round"
+            />
+          </>
+        ),
+        onSelect: () => {
+          setShowSettingsModal(true);
+        },
+      },
+    ],
+    [activePage, showSettingsModal, goToPage]
+  );
+
   return (
     <main className="relative h-[100dvh] w-full overflow-hidden flex flex-col">
       {/* NỀN NEON LIQUID GLASS (RADIAL GRADIENT THUẦN GPU, KHÔNG BLUR NẶNG GÂY LAG iOS) */}
@@ -2202,6 +2419,8 @@ export default function AudioPlayerPage() {
             src={`/api/image-proxy?url=${encodeURIComponent(currentTrack.thumbnail)}`}
             alt=""
             aria-hidden="true"
+            loading="lazy"
+            decoding="async"
             className="absolute inset-0 w-full h-full object-cover scale-115 blur-[38px] opacity-25 saturate-150 transition-opacity duration-700 transform-gpu"
           />
         )}
@@ -2597,6 +2816,7 @@ export default function AudioPlayerPage() {
                   <img
                     src={`/api/image-proxy?url=${encodeURIComponent(currentTrack.thumbnail)}`}
                     alt={currentTrack.title}
+                    decoding="async"
                     className="la-vinyl-spin w-full h-full object-cover"
                   />
                   <span className="la-art-glint" aria-hidden="true" />
@@ -2840,6 +3060,8 @@ export default function AudioPlayerPage() {
                           <img
                             src={`/api/image-proxy?url=${encodeURIComponent(item.thumbnail)}`}
                             alt={item.title}
+                            loading="lazy"
+                            decoding="async"
                             className="w-12 h-12 rounded-xl object-cover bg-white/10 border border-white/15 shrink-0"
                           />
                           <div className="min-w-0 flex-1">
@@ -2982,6 +3204,8 @@ export default function AudioPlayerPage() {
                                     item.thumbnail
                                   )}`}
                                   alt={item.title}
+                                  loading="lazy"
+                                  decoding="async"
                                   className="w-11 h-11 rounded-xl object-cover bg-white/10 shrink-0"
                                 />
                                 <div className="min-w-0 flex-1">
@@ -3058,6 +3282,8 @@ export default function AudioPlayerPage() {
                           <img
                             src={`/api/image-proxy?url=${encodeURIComponent(item.thumbnail)}`}
                             alt={item.title}
+                            loading="lazy"
+                            decoding="async"
                             className="w-11 h-11 rounded-xl object-cover bg-white/10 border border-white/15 shrink-0"
                           />
                           <div className="min-w-0 flex-1">
@@ -3328,6 +3554,8 @@ export default function AudioPlayerPage() {
                               <img
                                 src={`/api/image-proxy?url=${encodeURIComponent(item.thumbnail)}`}
                                 alt={item.title}
+                                loading="lazy"
+                                decoding="async"
                                 className="w-16 h-12 rounded-xl object-cover bg-white/10 border border-white/15"
                               />
                               <span className="absolute bottom-1 right-1 px-1.5 py-0.5 rounded bg-black/75 text-[10px] font-bold uppercase text-cyan-200">
@@ -3407,18 +3635,23 @@ export default function AudioPlayerPage() {
           }
         }}
         onTimeUpdate={() => {
-          if (audioRef.current) {
-            clearStallWatchdog();
-            const t = audioRef.current.currentTime;
-            if (t > 0) lastPlayTimeRef.current = t;
-            setCurrentTime(t);
+          const audio = audioRef.current;
+          if (!audio) return;
+          clearStallWatchdog();
+          const t = audio.currentTime;
+          if (t > 0) lastPlayTimeRef.current = t;
+          const wholeSec = Math.floor(t);
+          if (wholeSec !== lastUiSecondRef.current) {
+            lastUiSecondRef.current = wholeSec;
+            setCurrentTime(wholeSec);
             updateMediaSessionPosition();
-            checkSleepTimerAndFadeOut();
-            maybePrefetchNextTrack();
           }
+          checkSleepTimerAndFadeOut();
+          maybePrefetchNextTrack();
         }}
         onLoadedMetadata={() => {
           if (audioRef.current) {
+            lastUiSecondRef.current = Math.floor(audioRef.current.currentTime || 0);
             setDuration(audioRef.current.duration);
             updateMediaSessionPosition();
           }
@@ -3453,90 +3686,7 @@ export default function AudioPlayerPage() {
       />
 
       {/* THANH DOCK KIỂU MACBOOK LIQUID GLASS PHÓNG TO KHI RÊ / LƯỚT NGÓN TAY (#208) */}
-      <MacBookAppDock
-        items={[
-          {
-            id: 'player',
-            label: 'Nghe nhạc',
-            isActive: activePage === 'player',
-            gradFrom: '#22d3ee',
-            gradTo: '#6366f1',
-            iconPath: (
-              <>
-                <path
-                  d="M19 30V15l12-3v15"
-                  stroke="#fff"
-                  strokeWidth="2.8"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  fill="none"
-                />
-                <circle cx="15.5" cy="30.5" r="3.8" fill="#fff" />
-                <circle cx="27.5" cy="27.5" r="3.8" fill="#fff" />
-              </>
-            ),
-            onSelect: () => {
-              goToPage('player');
-            },
-          },
-          {
-            id: 'discover',
-            label: 'Tìm & Gợi ý',
-            isActive: activePage === 'discover',
-            gradFrom: '#f43f5e',
-            gradTo: '#ec4899',
-            iconPath: (
-              <>
-                <circle
-                  cx="20.5"
-                  cy="20.5"
-                  r="8"
-                  stroke="#fff"
-                  strokeWidth="3"
-                  fill="none"
-                />
-                <path
-                  d="M26.5 26.5l7 7"
-                  stroke="#fff"
-                  strokeWidth="3.2"
-                  strokeLinecap="round"
-                />
-              </>
-            ),
-            onSelect: () => {
-              goToPage('discover');
-            },
-          },
-          {
-            id: 'settings',
-            label: 'Cài đặt',
-            isActive: showSettingsModal,
-            gradFrom: '#475569',
-            gradTo: '#0f172a',
-            iconPath: (
-              <>
-                <circle
-                  cx="23"
-                  cy="23"
-                  r="5.5"
-                  stroke="#fff"
-                  strokeWidth="2.6"
-                  fill="none"
-                />
-                <path
-                  d="M23 11v3M23 32v3M11 23h3M32 23h3M14.5 14.5l2.2 2.2M29.3 29.3l2.2 2.2M31.5 14.5l-2.2 2.2M16.7 29.3l-2.2 2.2"
-                  stroke="#fff"
-                  strokeWidth="2.6"
-                  strokeLinecap="round"
-                />
-              </>
-            ),
-            onSelect: () => {
-              setShowSettingsModal(true);
-            },
-          },
-        ]}
-      />
+      <MacBookAppDock items={dockItems} />
     </main>
   );
 }

@@ -17,7 +17,7 @@ const WAVE_BARS = [
 /**
  * Sóng âm thanh chuyển sắc Cyan -> Indigo -> Pink 60fps trên GPU (#007, chỉ hiển thị tránh chạm nhầm tua khi cuộn).
  */
-export function WaveformVisualizer({
+export const WaveformVisualizer = React.memo(function WaveformVisualizer({
   isPlaying,
   progressPct = 0,
   duration = 0,
@@ -67,4 +67,4 @@ export function WaveformVisualizer({
       })}
     </div>
   );
-}
+});

@@ -16,7 +16,7 @@ const ALLOWED_AUDIO_HOSTS = [
   'muscdn.com',
 ];
 
-const MAX_CHUNK_BYTES = 1536 * 1024; // 1.5 MB mỗi đoạn Range (an toàn dưới mức giới hạn 4.5MB của Vercel & seek mượt trên iOS Safari)
+const MAX_CHUNK_BYTES = 1024 * 1024; // 1 MB mỗi đoạn Range (TTFB nhanh trên 5G, seek mượt & dưới giới hạn Vercel)
 
 function isAllowedAudioHost(rawUrl: string): boolean {
   try {
@@ -93,6 +93,8 @@ export async function GET(req: NextRequest) {
       'content-length',
       'content-range',
       'accept-ranges',
+      'etag',
+      'last-modified',
     ];
     for (const key of copyKeys) {
       const val = upstream.headers.get(key);
@@ -102,7 +104,7 @@ export async function GET(req: NextRequest) {
     if (!resHeaders.has('accept-ranges')) {
       resHeaders.set('accept-ranges', 'bytes');
     }
-    resHeaders.set('Cache-Control', 'no-store');
+    resHeaders.set('Cache-Control', 'private, max-age=1800');
     resHeaders.set('Access-Control-Allow-Origin', '*');
 
     return new NextResponse(upstream.body, {
